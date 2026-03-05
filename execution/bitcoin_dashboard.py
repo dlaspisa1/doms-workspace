@@ -73,7 +73,7 @@ def fetch_coingecko_current():
 def fetch_price_history(days: int):
     r = requests.get(
         "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
-        params={"vs_currency": "usd", "days": days, "interval": "daily" if days > 30 else "hourly"},
+        params={"vs_currency": "usd", "days": days},
         timeout=15
     )
     r.raise_for_status()
@@ -105,6 +105,42 @@ def fetch_mempool_stats():
     except Exception:
         stats["hashrate"] = {}
     return stats
+
+
+@st.cache_data(ttl=300)
+def fetch_fear_greed():
+    try:
+        r = requests.get("https://api.alternative.me/fng/?limit=30", timeout=10)
+        r.raise_for_status()
+        return r.json().get("data", [])
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=600)
+def fetch_reddit_sentiment():
+    try:
+        headers = {"User-Agent": "bitcoin-dashboard/1.0"}
+        r = requests.get(
+            "https://www.reddit.com/r/Bitcoin/hot.json?limit=50",
+            headers=headers, timeout=10
+        )
+        r.raise_for_status()
+        posts = r.json()["data"]["children"]
+        results = []
+        for p in posts:
+            d = p["data"]
+            if d.get("stickied"):
+                continue
+            results.append({
+                "title": d.get("title", ""),
+                "ups": d.get("ups", 0),
+                "comments": d.get("num_comments", 0),
+                "url": f"https://reddit.com{d.get('permalink', '')}",
+            })
+        return results[:25]
+    except Exception:
+        return []
 
 
 @st.cache_data(ttl=3600)  # Cache 1 hour — Blockchair free tier is rate-limited
@@ -404,6 +440,155 @@ def main():
     with r5:
         st.metric("All-Time High", fmt_price(ath))
 
+    # ── Market Mood ───────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">🧠 Market Mood & Sentiment</div>', unsafe_allow_html=True)
+
+    fg_data = fetch_fear_greed()
+    reddit_posts = fetch_reddit_sentiment()
+
+    mood_col, reddit_col = st.columns([1, 2])
+
+    with mood_col:
+        # ── Fear & Greed gauge ────────────────────────────────────────────────
+        if fg_data:
+            fg_val = int(fg_data[0]["value"])
+            fg_label = fg_data[0]["value_classification"]
+
+            if fg_val <= 20:
+                gauge_color = "#ef4444"
+            elif fg_val <= 40:
+                gauge_color = "#f97316"
+            elif fg_val <= 60:
+                gauge_color = "#eab308"
+            elif fg_val <= 80:
+                gauge_color = "#84cc16"
+            else:
+                gauge_color = "#22c55e"
+
+            fig_gauge = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=fg_val,
+                title={"text": f"Fear & Greed: {fg_label}", "font": {"color": "#aaa", "size": 14}},
+                gauge={
+                    "axis": {"range": [0, 100], "tickcolor": "#555"},
+                    "bar": {"color": gauge_color},
+                    "bgcolor": "#1a1a2e",
+                    "steps": [
+                        {"range": [0, 20], "color": "#2d1a1a"},
+                        {"range": [20, 40], "color": "#2d221a"},
+                        {"range": [40, 60], "color": "#2d2b1a"},
+                        {"range": [60, 80], "color": "#1e2d1a"},
+                        {"range": [80, 100], "color": "#1a2d1e"},
+                    ],
+                },
+                number={"font": {"color": gauge_color, "size": 48}},
+            ))
+            fig_gauge.update_layout(
+                plot_bgcolor="#0f0f1a", paper_bgcolor="#0f0f1a",
+                height=250, margin=dict(l=20, r=20, t=40, b=0),
+            )
+            st.plotly_chart(fig_gauge, use_container_width=True)
+
+            # 30-day Fear & Greed trend
+            fg_hist = pd.DataFrame(fg_data[::-1])
+            fg_hist["value"] = fg_hist["value"].astype(int)
+            fg_hist["date"] = pd.to_datetime(fg_hist["timestamp"].astype(int), unit="s")
+            fig_fg = go.Figure(go.Scatter(
+                x=fg_hist["date"], y=fg_hist["value"],
+                fill="tozeroy", line=dict(color=gauge_color, width=2),
+                fillcolor=f"rgba(245,158,11,0.1)",
+            ))
+            fig_fg.add_hline(y=50, line_dash="dot", line_color="#555")
+            fig_fg.update_layout(
+                plot_bgcolor="#0f0f1a", paper_bgcolor="#0f0f1a",
+                font=dict(color="#aaa"), height=150,
+                yaxis=dict(range=[0, 100], gridcolor="#1e1e2e"),
+                margin=dict(l=0, r=0, t=10, b=0),
+                showlegend=False,
+            )
+            st.caption("30-day Fear & Greed trend")
+            st.plotly_chart(fig_fg, use_container_width=True)
+
+        # ── On-chain buy/sell signal ──────────────────────────────────────────
+        st.markdown("**On-Chain Signal**")
+        signals = []
+        if change_24h > 2:
+            signals.append(("24h momentum", "Bullish", "#22c55e"))
+        elif change_24h < -2:
+            signals.append(("24h momentum", "Bearish", "#ef4444"))
+        else:
+            signals.append(("24h momentum", "Neutral", "#eab308"))
+
+        if change_7d > 5:
+            signals.append(("7d trend", "Bullish", "#22c55e"))
+        elif change_7d < -5:
+            signals.append(("7d trend", "Bearish", "#ef4444"))
+        else:
+            signals.append(("7d trend", "Neutral", "#eab308"))
+
+        if fg_data:
+            if fg_val < 30:
+                signals.append(("Sentiment", "Buy Zone", "#22c55e"))
+            elif fg_val > 75:
+                signals.append(("Sentiment", "Sell Zone", "#ef4444"))
+            else:
+                signals.append(("Sentiment", "Neutral", "#eab308"))
+
+        bull = sum(1 for s in signals if s[1] in ("Bullish", "Buy Zone"))
+        bear = sum(1 for s in signals if s[1] in ("Bearish", "Sell Zone"))
+        overall = "🟢 Accumulate" if bull > bear else ("🔴 Caution" if bear > bull else "🟡 Hold")
+        st.markdown(f"**Overall: {overall}**")
+        for label, val, color in signals:
+            st.markdown(f"<span style='color:#888'>{label}:</span> <span style='color:{color}'>{val}</span>", unsafe_allow_html=True)
+
+    with reddit_col:
+        # ── Reddit sentiment ──────────────────────────────────────────────────
+        st.markdown("**r/Bitcoin — Top Posts Right Now**")
+
+        if reddit_posts:
+            BULLISH_WORDS = {"bull", "bullish", "pump", "moon", "ath", "buy", "long", "up", "surge", "rally", "gain", "accumulate", "hodl"}
+            BEARISH_WORDS = {"bear", "bearish", "dump", "crash", "sell", "short", "down", "drop", "fall", "fear", "panic", "capitulate"}
+
+            bull_count = 0
+            bear_count = 0
+            rows = []
+            for p in reddit_posts:
+                words = set(p["title"].lower().split())
+                is_bull = bool(words & BULLISH_WORDS)
+                is_bear = bool(words & BEARISH_WORDS)
+                if is_bull:
+                    bull_count += 1
+                    mood = "🟢"
+                elif is_bear:
+                    bear_count += 1
+                    mood = "🔴"
+                else:
+                    mood = "⚪"
+                rows.append({
+                    "": mood,
+                    "Title": p["title"][:90] + ("…" if len(p["title"]) > 90 else ""),
+                    "↑": f"{p['ups']:,}",
+                    "💬": f"{p['comments']:,}",
+                })
+
+            total = bull_count + bear_count
+            if total > 0:
+                bull_pct = round(bull_count / total * 100)
+                bear_pct = 100 - bull_pct
+                s1, s2, s3 = st.columns(3)
+                with s1:
+                    st.metric("🟢 Bullish Posts", f"{bull_pct}%")
+                with s2:
+                    st.metric("🔴 Bearish Posts", f"{bear_pct}%")
+                with s3:
+                    st.metric("Posts Analyzed", len(reddit_posts))
+
+            df_reddit = pd.DataFrame(rows)
+            st.dataframe(df_reddit, use_container_width=True, hide_index=True, height=380)
+            st.caption("Source: r/Bitcoin hot posts · 🟢 bullish keywords · 🔴 bearish keywords · ⚪ neutral")
+        else:
+            st.info("Reddit data unavailable")
+
     # ── Top 100 Wallets ───────────────────────────────────────────────────────
     st.markdown('<div class="section-header">🐋 Top 100 Bitcoin Wallets (Richest Addresses)</div>', unsafe_allow_html=True)
 
@@ -449,7 +634,7 @@ def main():
     st.markdown("---")
     st.markdown(
         "<div style='color:#555; text-align:center; font-size:12px;'>"
-        "Data: CoinGecko · Mempool.space · Blockchain.com · Blockchair · Refreshes every 5 min · Not financial advice"
+        "Data: CoinGecko · Mempool.space · Blockchain.com · Blockchair · Alternative.me · Reddit · Refreshes every 5 min · Not financial advice"
         "</div>",
         unsafe_allow_html=True
     )
