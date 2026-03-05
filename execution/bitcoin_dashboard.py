@@ -14,9 +14,10 @@ Run:
 import streamlit as st
 import requests
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import time
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -105,6 +106,30 @@ def fetch_mempool_stats():
     except Exception:
         stats["hashrate"] = {}
     return stats
+
+
+@st.cache_data(ttl=60)
+def fetch_block_height():
+    try:
+        return int(requests.get("https://mempool.space/api/blocks/tip/height", timeout=10).text)
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=86400)
+def fetch_google_trends():
+    try:
+        from pytrends.request import TrendReq
+        pt = TrendReq(hl="en-US", tz=360, timeout=(10, 25))
+        pt.build_payload(["bitcoin"], cat=0, timeframe="today 12-m")
+        df = pt.interest_over_time()
+        if df.empty:
+            return None
+        df = df.reset_index()[["date", "bitcoin"]]
+        df.columns = ["date", "interest"]
+        return df
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=300)
@@ -440,6 +465,236 @@ def main():
     with r5:
         st.metric("All-Time High", fmt_price(ath))
 
+    # ── Halving Cycle ─────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">⛏️ Halving Cycle</div>', unsafe_allow_html=True)
+
+    block_height = fetch_block_height()
+    NEXT_HALVING_BLOCK = 1_050_000
+    GENESIS = datetime(2009, 1, 3)
+
+    hc1, hc2 = st.columns([1, 2])
+    with hc1:
+        if block_height:
+            blocks_left = max(NEXT_HALVING_BLOCK - block_height, 0)
+            days_left = blocks_left * 10 / 1440
+            est_date = datetime.now() + timedelta(days=days_left)
+            st.metric("Current Block", f"{block_height:,}")
+            st.metric("Blocks Until Halving", f"{blocks_left:,}")
+            st.metric("Est. Days Remaining", f"{days_left:.0f} days")
+            st.metric("Est. Halving Date", est_date.strftime("%b %Y"))
+            st.metric("Current Block Reward", "3.125 BTC")
+            st.metric("Post-Halving Reward", "1.5625 BTC")
+        else:
+            st.info("Block data unavailable")
+
+    with hc2:
+        halvings = pd.DataFrame([
+            {"Halving": "#1", "Date": "Nov 28, 2012", "Block": "210,000", "Reward": "50→25 BTC", "Price at Halving": "$12", "Price 1yr Later": "$1,000", "Gain": "+8,233%"},
+            {"Halving": "#2", "Date": "Jul 9, 2016",  "Block": "420,000", "Reward": "25→12.5 BTC", "Price at Halving": "$650", "Price 1yr Later": "$2,500", "Gain": "+285%"},
+            {"Halving": "#3", "Date": "May 11, 2020", "Block": "630,000", "Reward": "12.5→6.25 BTC", "Price at Halving": "$8,500", "Price 1yr Later": "$57,000", "Gain": "+571%"},
+            {"Halving": "#4", "Date": "Apr 19, 2024", "Block": "840,000", "Reward": "6.25→3.125 BTC", "Price at Halving": "$63,800", "Price 1yr Later": "TBD", "Gain": "TBD"},
+            {"Halving": "#5 (next)", "Date": "~Apr 2028", "Block": "1,050,000", "Reward": "3.125→1.5625 BTC", "Price at Halving": "?", "Price 1yr Later": "?", "Gain": "?"},
+        ])
+        st.dataframe(halvings, use_container_width=True, hide_index=True)
+        st.caption("Historically, BTC has peaked 12-18 months after each halving as reduced supply meets growing demand.")
+
+    # ── Rainbow Chart ─────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">🌈 Bitcoin Rainbow Chart (Log Regression)</div>', unsafe_allow_html=True)
+
+    # Regression params calibrated from Bitcoin's full history (log10 scale)
+    A, B = 5.84, -17.1
+    BAND_LABELS = [
+        ("Maximum Bubble Territory", "rgba(139,0,0,0.7)"),
+        ("SELL. Seriously, SELL!", "rgba(220,38,38,0.7)"),
+        ("FOMO Intensifies", "rgba(234,88,12,0.7)"),
+        ("Is This a Bubble?", "rgba(234,179,8,0.7)"),
+        ("HODL", "rgba(132,204,22,0.7)"),
+        ("Still Cheap", "rgba(34,197,94,0.7)"),
+        ("Accumulate", "rgba(20,184,166,0.7)"),
+        ("BTC on Sale", "rgba(6,182,212,0.7)"),
+        ("Fire Sale", "rgba(37,99,235,0.7)"),
+    ]
+    BAND_TOPS = [40.0, 16.0, 6.5, 2.6, 1.05, 0.42, 0.17, 0.07, 0.03]  # multiples of regression line
+
+    today = datetime.now()
+    future = today + timedelta(days=365)
+    start = datetime(2010, 7, 1)  # start from when BTC had a price
+    dates = pd.date_range(start, future, freq="W")
+    days_since_genesis = np.array([(d - pd.Timestamp(GENESIS)).days for d in dates], dtype=float)
+    days_since_genesis = np.maximum(days_since_genesis, 1)
+    regression = 10 ** (A * np.log10(days_since_genesis) + B)
+
+    fig_rb = go.Figure()
+    prev_top = np.zeros(len(dates))
+    for (label, color), top_mult in zip(BAND_LABELS, BAND_TOPS):
+        band_top = regression * top_mult
+        fig_rb.add_trace(go.Scatter(
+            x=list(dates) + list(dates[::-1]),
+            y=list(band_top) + list(prev_top[::-1]),
+            fill="toself", fillcolor=color, line=dict(width=0),
+            name=label, hoverinfo="skip",
+        ))
+        prev_top = band_top
+
+    # Current price dot
+    current_days = (today - GENESIS).days
+    reg_now = 10 ** (A * np.log10(current_days) + B)
+    ratio = price / reg_now
+    current_band = "Maximum Bubble Territory"
+    for (label, _), top_mult in zip(BAND_LABELS, BAND_TOPS):
+        if ratio <= top_mult:
+            current_band = label
+
+    fig_rb.add_trace(go.Scatter(
+        x=[today], y=[price],
+        mode="markers+text",
+        marker=dict(size=14, color="white", symbol="star"),
+        text=[f"  NOW: {fmt_price(price)}"],
+        textfont=dict(color="white", size=12),
+        name="Current Price",
+    ))
+
+    fig_rb.update_layout(
+        plot_bgcolor="#0f0f1a", paper_bgcolor="#0f0f1a",
+        font=dict(color="#aaa"), height=420,
+        yaxis=dict(type="log", title="Price (USD, log scale)", gridcolor="#1e1e2e", tickformat="$,.0f"),
+        xaxis=dict(gridcolor="#1e1e2e"),
+        legend=dict(x=0.01, y=0.99, bgcolor="rgba(0,0,0,0.5)", font=dict(size=10)),
+        margin=dict(l=0, r=0, t=10, b=0),
+        hovermode="x unified",
+    )
+    st.plotly_chart(fig_rb, use_container_width=True)
+    st.caption(f"Current price is in the **{current_band}** zone · Log regression: log₁₀(price) = {A} × log₁₀(days since genesis) {B} · Not financial advice")
+
+    # ── Stock-to-Flow ─────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📐 Stock-to-Flow Model</div>', unsafe_allow_html=True)
+
+    BLOCKS_PER_YEAR = 144 * 365
+    CURRENT_REWARD = 3.125
+    annual_new_btc = CURRENT_REWARD * BLOCKS_PER_YEAR
+    sf_ratio = circulating / annual_new_btc if annual_new_btc else 0
+    # PlanB's model: ln(price) = 3.36 * ln(SF) - 1.84
+    sf_model_price = np.exp(-1.84) * (sf_ratio ** 3.36) if sf_ratio > 0 else 0
+    sf_deviation = ((price / sf_model_price) - 1) * 100 if sf_model_price > 0 else 0
+
+    sf1, sf2, sf3, sf4 = st.columns(4)
+    with sf1:
+        st.metric("S2F Ratio", f"{sf_ratio:.1f}", "Post-4th halving")
+    with sf2:
+        st.metric("S2F Model Price", fmt_price(sf_model_price))
+    with sf3:
+        st.metric("Actual Price", fmt_price(price))
+    with sf4:
+        color_txt = "Below model (undervalued)" if sf_deviation < 0 else "Above model (overvalued)"
+        st.metric("vs Model", f"{sf_deviation:+.0f}%", color_txt)
+
+    # S2F ratio over time (halvings)
+    sf_history = pd.DataFrame([
+        {"Date": "2009", "Halving": "Genesis", "Reward": 50, "S2F": 0.7, "Model Price": "$0"},
+        {"Date": "2012", "Halving": "#1", "Reward": 25, "S2F": 11, "Model Price": "$20"},
+        {"Date": "2016", "Halving": "#2", "Reward": 12.5, "S2F": 25, "Model Price": "$740"},
+        {"Date": "2020", "Halving": "#3", "Reward": 6.25, "S2F": 56, "Model Price": "$55,000"},
+        {"Date": "2024", "Halving": "#4", "Reward": 3.125, "S2F": f"{sf_ratio:.0f}", "Model Price": fmt_price(sf_model_price)},
+        {"Date": "2028", "Halving": "#5 (est.)", "Reward": 1.5625, "S2F": "~240", "Model Price": "TBD"},
+    ])
+    st.dataframe(sf_history, use_container_width=True, hide_index=True)
+    st.caption("PlanB's S2F model: price = e^(-1.84) × SF^3.36 · Higher S2F = greater scarcity = higher model price · Model is controversial and not a guarantee")
+
+    # ── Institutional Holdings ────────────────────────────────────────────────
+    st.markdown('<div class="section-header">🏦 Institutional & Sovereign Bitcoin Holdings</div>', unsafe_allow_html=True)
+
+    institutions = [
+        {"Entity": "BlackRock (IBIT ETF)", "Type": "ETF", "Est. BTC": 550_000, "Notes": "Largest Bitcoin ETF by AUM"},
+        {"Entity": "Grayscale (GBTC)", "Type": "ETF/Trust", "Est. BTC": 220_000, "Notes": "Original institutional product"},
+        {"Entity": "Strategy (MicroStrategy)", "Type": "Corp Treasury", "Est. BTC": 226_000, "Notes": "Largest corporate holder"},
+        {"Entity": "Fidelity (FBTC)", "Type": "ETF", "Est. BTC": 175_000, "Notes": "Second largest spot ETF"},
+        {"Entity": "US Government", "Type": "Sovereign", "Est. BTC": 200_000, "Notes": "Seized assets (DOJ/Treasury)"},
+        {"Entity": "Ark Invest (ARKB)", "Type": "ETF", "Est. BTC": 50_000, "Notes": "Cathie Wood's Bitcoin ETF"},
+        {"Entity": "El Salvador", "Type": "Sovereign", "Est. BTC": 6_000, "Notes": "Legal tender nation"},
+        {"Entity": "Coinbase (custody)", "Type": "Custodian", "Est. BTC": 800_000, "Notes": "Custodian for BlackRock, Fidelity & others"},
+        {"Entity": "Satoshi Nakamoto", "Type": "Individual", "Est. BTC": 1_100_000, "Notes": "Genesis era — never moved"},
+    ]
+    df_inst = pd.DataFrame(institutions)
+    df_inst["Est. USD Value"] = df_inst["Est. BTC"].apply(lambda x: fmt_large(x * price))
+    df_inst["Est. BTC"] = df_inst["Est. BTC"].apply(lambda x: f"{x:,}")
+    df_inst["% of Supply"] = df_inst["Est. BTC"].apply(lambda x: f"{int(x.replace(',','')) / 21_000_000 * 100:.2f}%")
+
+    total_inst = sum(e["Est. BTC"] if isinstance(e["Est. BTC"], int) else int(str(e["Est. BTC"]).replace(",","")) for e in institutions)
+    i1, i2, i3 = st.columns(3)
+    with i1:
+        st.metric("Known Institutional BTC", f"{total_inst:,}")
+    with i2:
+        st.metric("% of 21M Supply", f"{total_inst/21_000_000*100:.1f}%")
+    with i3:
+        st.metric("Est. USD Value", fmt_large(total_inst * price))
+
+    st.dataframe(df_inst[["Entity", "Type", "Est. BTC", "Est. USD Value", "% of Supply", "Notes"]], use_container_width=True, hide_index=True)
+    st.caption("⚠️ Estimates based on public filings and reports through mid-2025 — actual holdings may differ")
+
+    # ── Google Trends ─────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">📈 Google Trends — "bitcoin" Search Interest</div>', unsafe_allow_html=True)
+
+    trends_df = fetch_google_trends()
+    if trends_df is not None:
+        current_interest = int(trends_df["interest"].iloc[-1])
+        peak_interest = int(trends_df["interest"].max())
+        avg_interest = int(trends_df["interest"].mean())
+
+        t1, t2, t3 = st.columns(3)
+        with t1:
+            st.metric("Current Interest", f"{current_interest}/100")
+        with t2:
+            st.metric("12-Month Peak", f"{peak_interest}/100")
+        with t3:
+            st.metric("12-Month Average", f"{avg_interest}/100")
+
+        fig_trends = go.Figure()
+        fig_trends.add_trace(go.Scatter(
+            x=trends_df["date"], y=trends_df["interest"],
+            fill="tozeroy", line=dict(color="#818cf8", width=2),
+            fillcolor="rgba(129,140,248,0.15)", name="Search Interest"
+        ))
+        fig_trends.add_hline(y=avg_interest, line_dash="dot", line_color="#555",
+                             annotation_text=f"12mo avg: {avg_interest}", annotation_font_color="#888")
+        fig_trends.update_layout(
+            plot_bgcolor="#0f0f1a", paper_bgcolor="#0f0f1a",
+            font=dict(color="#aaa"), height=200,
+            yaxis=dict(range=[0, 100], title="Search Interest (0-100)", gridcolor="#1e1e2e"),
+            margin=dict(l=0, r=0, t=10, b=0),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_trends, use_container_width=True)
+        st.caption("Source: Google Trends · 100 = peak search interest · High retail interest near market tops, low interest near bottoms")
+    else:
+        st.info("Google Trends data temporarily unavailable")
+
+    # ── Advanced On-Chain (Requires Glassnode) ────────────────────────────────
+    st.markdown('<div class="section-header">🔬 Advanced On-Chain Metrics</div>', unsafe_allow_html=True)
+    st.markdown("The following metrics require live UTXO-set data — available via **[Glassnode](https://glassnode.com)** (paid):")
+
+    g1, g2, g3 = st.columns(3)
+    with g1:
+        st.markdown("""
+**LTH Supply %**
+% of BTC unmoved for 1+ year.
+High % = strong hands holding = bullish.
+*Historically above 70% near market bottoms.*
+        """)
+    with g2:
+        st.markdown("""
+**Realized Price**
+Avg price all BTC last changed hands.
+Price below this = entire market at a loss.
+*Historically the strongest buy signal.*
+        """)
+    with g3:
+        st.markdown("""
+**HODL Waves**
+Supply breakdown by age: 1w / 1m / 6m / 1y / 5y+.
+Rising old bands = accumulation.
+Rising new bands = distribution (potential top).
+        """)
+
     # ── Market Mood ───────────────────────────────────────────────────────────
     st.markdown('<div class="section-header">🧠 Market Mood & Sentiment</div>', unsafe_allow_html=True)
 
@@ -634,7 +889,7 @@ def main():
     st.markdown("---")
     st.markdown(
         "<div style='color:#555; text-align:center; font-size:12px;'>"
-        "Data: CoinGecko · Mempool.space · Blockchain.com · Blockchair · Alternative.me · Reddit · Refreshes every 5 min · Not financial advice"
+        "Data: CoinGecko · Mempool.space · Blockchain.com · Blockchair · Alternative.me · Reddit · Google Trends · Refreshes every 5 min · Not financial advice"
         "</div>",
         unsafe_allow_html=True
     )
