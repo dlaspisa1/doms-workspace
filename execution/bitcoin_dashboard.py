@@ -107,6 +107,20 @@ def fetch_mempool_stats():
     return stats
 
 
+@st.cache_data(ttl=3600)  # Cache 1 hour — Blockchair free tier is rate-limited
+def fetch_top_wallets():
+    try:
+        r = requests.get(
+            "https://api.blockchair.com/bitcoin/addresses",
+            params={"s": "balance(desc)", "limit": 100},
+            timeout=15
+        )
+        r.raise_for_status()
+        return r.json().get("data", [])
+    except Exception:
+        return []
+
+
 @st.cache_data(ttl=300)
 def fetch_blockchain_stats():
     try:
@@ -390,11 +404,52 @@ def main():
     with r5:
         st.metric("All-Time High", fmt_price(ath))
 
+    # ── Top 100 Wallets ───────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">🐋 Top 100 Bitcoin Wallets (Richest Addresses)</div>', unsafe_allow_html=True)
+
+    with st.spinner("Loading wallet data..."):
+        wallets = fetch_top_wallets()
+
+    if wallets:
+        rows = []
+        total_supply = 21_000_000
+        for i, w in enumerate(wallets):
+            balance_btc = w.get("balance", 0) / 1e8
+            balance_usd = balance_btc * price
+            pct_supply = (balance_btc / total_supply) * 100
+            rows.append({
+                "Rank": i + 1,
+                "Address": w.get("address", "—"),
+                "Balance (BTC)": f"{balance_btc:,.2f}",
+                "Balance (USD)": fmt_large(balance_usd),
+                "% of Supply": f"{pct_supply:.4f}%",
+                "Txs": f"{w.get('transaction_count', 0):,}",
+            })
+        df_wallets = pd.DataFrame(rows)
+
+        # Summary stats
+        total_btc_top100 = sum(w.get("balance", 0) / 1e8 for w in wallets)
+        pct_held = (total_btc_top100 / total_supply) * 100
+        usd_held = total_btc_top100 * price
+
+        w1, w2, w3 = st.columns(3)
+        with w1:
+            st.metric("Top 100 Hold", f"{total_btc_top100:,.0f} BTC")
+        with w2:
+            st.metric("% of Total Supply", f"{pct_held:.2f}%")
+        with w3:
+            st.metric("USD Value Held", fmt_large(usd_held))
+
+        st.dataframe(df_wallets, use_container_width=True, hide_index=True, height=400)
+        st.caption("Data: Blockchair · Cached 1 hour · Includes exchange cold wallets, ETF custodians, and long-term holders")
+    else:
+        st.info("Wallet data temporarily unavailable (Blockchair rate limit). Refreshes hourly.")
+
     # ── Footer ────────────────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown(
         "<div style='color:#555; text-align:center; font-size:12px;'>"
-        "Data: CoinGecko · Mempool.space · Blockchain.com · Refreshes every 5 min · Not financial advice"
+        "Data: CoinGecko · Mempool.space · Blockchain.com · Blockchair · Refreshes every 5 min · Not financial advice"
         "</div>",
         unsafe_allow_html=True
     )
