@@ -1,0 +1,14 @@
+{
+  "webhooks": {
+    "example": {
+      "directive": "directives/example_webhook.md",
+      "description": "Example webhook configuration",
+      "tools": ["send_email", "read_sheet", "update_sheet"]
+    }
+  },
+  "config": {
+    "base_url": "https://nick-90891--claude-orchestrator-directive.modal.run",
+    "list_url": "https://nick-90891--claude-orchestrator-list-webhooks.modal.run",
+    "test_url": "https://nick-90891--claude-orchestrator-test-email.modal.run"
+  }
+}
