@@ -55,30 +55,81 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ── API fetchers (cached 5 min) ───────────────────────────────────────────────
-@st.cache_data(ttl=300)
+# ── API fetchers ──────────────────────────────────────────────────────────────
+
+def _coincap_current_as_coingecko():
+    """Fetch from CoinCap and return a CoinGecko market_data-compatible dict."""
+    r = requests.get("https://api.coincap.io/v2/assets/bitcoin", timeout=15)
+    r.raise_for_status()
+    d = r.json().get("data", {})
+    price   = float(d.get("priceUsd", 0) or 0)
+    mcap    = float(d.get("marketCapUsd", 0) or 0)
+    vol     = float(d.get("volumeUsd24Hr", 0) or 0)
+    chg24h  = float(d.get("changePercent24Hr", 0) or 0)
+    supply  = float(d.get("supply", 0) or 0)
+    return {
+        "market_data": {
+            "current_price":              {"usd": price},
+            "price_change_percentage_24h": chg24h,
+            "price_change_percentage_7d":  0,
+            "price_change_percentage_30d": 0,
+            "market_cap":                 {"usd": mcap},
+            "total_volume":               {"usd": vol},
+            "high_24h":                   {"usd": 0},
+            "low_24h":                    {"usd": 0},
+            "ath":                        {"usd": 0},
+            "ath_change_percentage":      {"usd": 0},
+            "circulating_supply":          supply,
+        }
+    }
+
+
+def _coincap_history(days: int):
+    """Fetch price history from CoinCap (fallback). Returns CoinGecko-compatible dict."""
+    end_ms   = int(time.time() * 1000)
+    start_ms = end_ms - days * 86_400_000
+    interval = "d1" if days >= 30 else "h1"
+    r = requests.get(
+        "https://api.coincap.io/v2/assets/bitcoin/history",
+        params={"interval": interval, "start": start_ms, "end": end_ms},
+        timeout=15,
+    )
+    r.raise_for_status()
+    raw = r.json().get("data", [])
+    prices  = [[int(p["time"]), float(p["priceUsd"])] for p in raw]
+    volumes = [[int(p["time"]), 0] for p in raw]
+    return {"prices": prices, "total_volumes": volumes}
+
+
+@st.cache_data(ttl=600)
 def fetch_coingecko_current():
-    r = requests.get(
-        "https://api.coingecko.com/api/v3/coins/bitcoin",
-        params={
-            "localization": "false", "tickers": "false",
-            "community_data": "false", "developer_data": "false"
-        },
-        timeout=15
-    )
-    r.raise_for_status()
-    return r.json()
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/coins/bitcoin",
+            params={
+                "localization": "false", "tickers": "false",
+                "community_data": "false", "developer_data": "false"
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return _coincap_current_as_coingecko()
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600)
 def fetch_price_history(days: int):
-    r = requests.get(
-        "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
-        params={"vs_currency": "usd", "days": days},
-        timeout=15
-    )
-    r.raise_for_status()
-    return r.json()
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
+            params={"vs_currency": "usd", "days": days},
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return _coincap_history(days)
 
 
 @st.cache_data(ttl=300)
@@ -265,6 +316,49 @@ def main():
         st.metric("7d Change", f"{change_7d:+.2f}%")
     with c5:
         st.metric("30d Change", f"{change_30d:+.2f}%")
+
+    st.markdown("---")
+
+    # ── Mining Economics ──────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">⛏️ Mining Economics</div>', unsafe_allow_html=True)
+
+    # Resolve hashrate (H/s) from best available source
+    _hashrate_data = mempool.get("hashrate", {})
+    _current_hashrate = _hashrate_data.get("currentHashrate") if _hashrate_data else None
+    if not _current_hashrate:
+        # blockchain.info returns hash_rate in GH/s
+        _bc_hr_ghs = bc_stats.get("hash_rate", 0)
+        if _bc_hr_ghs:
+            _current_hashrate = _bc_hr_ghs * 1e9
+
+    # Assumptions: 30 J/TH average fleet efficiency, $0.05/kWh electricity
+    _efficiency_j_per_th = 30
+    _electricity_usd_per_kwh = 0.05
+    _hashrate_th = (_current_hashrate or 0) / 1e12
+    _power_watts = _hashrate_th * _efficiency_j_per_th
+    _energy_per_day_kwh = (_power_watts / 1000) * 24
+    _cost_per_day = _energy_per_day_kwh * _electricity_usd_per_kwh
+    _btc_per_day = 144 * 3.125  # post-4th halving: 450 BTC/day
+    _mining_cost = _cost_per_day / _btc_per_day if _btc_per_day else 0
+    _profit_margin = ((price - _mining_cost) / price * 100) if price > 0 and _mining_cost > 0 else 0
+    _price_to_cost = price / _mining_cost if _mining_cost > 0 else 0
+    _network_gw = _power_watts / 1e9
+
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    with mc1:
+        st.metric("Est. Mining Cost/BTC", fmt_price(_mining_cost) if _mining_cost > 0 else "—")
+    with mc2:
+        _margin_label = "Profitable" if _profit_margin >= 0 else "Unprofitable"
+        st.metric("Miner Profit Margin", f"{_profit_margin:+.1f}%" if _mining_cost > 0 else "—", _margin_label if _mining_cost > 0 else "")
+    with mc3:
+        st.metric("Price / Cost Ratio", f"{_price_to_cost:.2f}x" if _mining_cost > 0 else "—")
+    with mc4:
+        st.metric("Est. Network Power", f"{_network_gw:.1f} GW" if _network_gw > 0 else "—")
+
+    st.caption(
+        "Estimates assume ~30 J/TH average fleet efficiency and $0.05/kWh electricity. "
+        "Actual costs vary by miner hardware and geography."
+    )
 
     st.markdown("---")
 
