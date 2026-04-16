@@ -1049,7 +1049,7 @@ def move_to_trash(service, message_ids: list[str], dry_run: bool) -> int:
         batch = message_ids[index:index + 1000]
         service.users().messages().batchModify(
             userId="me",
-            body={"ids": batch, "addLabelIds": ["TRASH"]},
+            body={"ids": batch, "addLabelIds": ["TRASH"], "removeLabelIds": ["SPAM"]},
         ).execute()
         moved += len(batch)
     return moved
@@ -1067,7 +1067,8 @@ def send_report_email(service, recipient: str, report: dict[str, Any]) -> str:
             source = item.get("source", "unknown")
             sender = normalize_whitespace(item.get("sender", "")) or "(unknown sender)"
             msg_subject = normalize_whitespace(item.get("subject", "")) or "(no subject)"
-            moved_lines.append(f"{index}. [{source}] {sender} | {msg_subject}")
+            msg_date = item.get("date", "")
+            moved_lines.append(f"{index}. [{source}] {msg_date} | {sender} | {msg_subject}")
     else:
         moved_lines.append("No messages were selected for trash action.")
 
