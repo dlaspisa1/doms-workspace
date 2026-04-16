@@ -57,21 +57,37 @@ def send_alert(subject, message):
     image=image,
     secrets=[modal.Secret.from_name("gmail-token")],
     schedule=modal.Cron("*/15 9-16 * * 1-5"),  # Every 15 min during market hours (9am-4pm ET, Mon-Fri)
+    timeout=120,
 )
 def check_tesla():
     import yfinance as yf
     from datetime import datetime
+    import time
 
-    # Get Tesla stock data
-    tsla = yf.Ticker("TSLA")
-    data = tsla.history(period="1d")
+    # Get Tesla stock data — use download() to avoid the slow .info/quote-summary fetch
+    data = None
+    for attempt in range(3):
+        try:
+            data = yf.download("TSLA", period="1d", progress=False, auto_adjust=True)
+            break
+        except Exception as e:
+            print(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < 2:
+                time.sleep(5 * (attempt + 1))
 
-    if data.empty:
+    if data is None or data.empty:
         print("Market closed or no data")
         return
 
-    price = data['Close'].iloc[-1]
-    high = data['High'].max()
+    # Flatten MultiIndex columns if present (yf.download returns MultiIndex for single ticker)
+    if isinstance(data.columns, type(data.columns)) and hasattr(data.columns, 'get_level_values'):
+        try:
+            data.columns = data.columns.get_level_values(0)
+        except Exception:
+            pass
+
+    price = float(data['Close'].iloc[-1])
+    high = float(data['High'].max())
     drop = (high - price) / high * 100 if high > 0 else 0
     threshold = int(drop // INCREMENT) * INCREMENT
 
