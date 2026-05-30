@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase, hasSupabase } from './supabaseClient';
 import Auth from './Auth';
+import AccountView from './AccountView';
 
 // ─── Data ───────────────────────────────────────────────────────────────────
 
@@ -725,6 +726,7 @@ export default function App(){
     {id:"recur",icon:"↻",label:`Recurring${recur.length?` (${recur.length})`:""}`},
     {id:"summary",icon:"📊",label:"Summary"},
     {id:"attest",icon:attest.signed?"✓":"📝",label:"Attest"},
+    {id:"account",icon:"👤",label:"Account"},
   ];
 
   // Auth gate (only when cloud is configured)
@@ -741,17 +743,6 @@ export default function App(){
   return(
     <div style={{height:"100vh",display:"flex",flexDirection:"column",background:"#0F0E0C"}}>
 
-      {/* Account bar */}
-      {hasSupabase&&session&&(
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#0A0908",borderBottom:"1px solid #1E1C18",padding:"5px 14px",flexShrink:0}}>
-          <span style={{fontSize:10,color:syncColor,letterSpacing:"0.08em"}}>{syncLabel}</span>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <span style={{fontSize:10,color:"#7A6A50"}}>{session.user.email}</span>
-            <button onClick={signOut} style={{background:"none",border:"1px solid #2A2820",color:"#AC9E86",fontSize:9,letterSpacing:"0.12em",textTransform:"uppercase",padding:"3px 8px",borderRadius:3,cursor:"pointer"}}>Sign out</button>
-          </div>
-        </div>
-      )}
-
       {/* Header */}
       <div style={{background:"#0F0E0C",borderBottom:"1px solid #2A2820",padding:"14px 16px 12px",flexShrink:0}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -762,6 +753,7 @@ export default function App(){
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:28,fontWeight:"bold",color:"#C8A96E",lineHeight:1}}>{totalHrs.toFixed(1)}<span style={{fontSize:12,color:"#C8BCA4",marginLeft:3}}>/ 750h</span></div>
             <div style={{fontSize:9,letterSpacing:"0.15em",textTransform:"uppercase",color:onPace?"#7EB8A4":"#C87E8A",marginTop:2}}>{onPace?"● On pace":"● Behind pace"}</div>
+            {hasSupabase&&syncLabel&&<div style={{fontSize:9,color:syncColor,marginTop:2,letterSpacing:"0.08em"}}>{syncLabel}</div>}
           </div>
         </div>
         {/* Progress bar */}
@@ -792,6 +784,7 @@ export default function App(){
         {view==="recur"&&<RecurView recur={recur} setRecur={setRecur} logs={logs} setLogs={setLogs} properties={properties} setProperties={setProperties}/>}
         {view==="summary"&&<SummaryView logs={logs} totalHrs={totalHrs} totalMs={totalMs} exportCSV={exportCSV}/>}
         {view==="attest"&&<AttestView logs={logs} totalHrs={totalHrs} attest={attest} setAttest={setAttest}/>}
+        {view==="account"&&<AccountView session={session} onSignOut={signOut}/>}
       </div>
     </div>
   );
