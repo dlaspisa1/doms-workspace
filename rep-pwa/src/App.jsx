@@ -631,32 +631,52 @@ export default function App(){
 
   // ── Cloud sync (Supabase) ──────────────────────────────────────────────────
   const [session,setSession]=useState(null);
-  const [authReady,setAuthReady]=useState(!hasSupabase); // local-only mode is "ready" immediately
-  const [synced,setSynced]=useState(false);              // initial server load done?
-  const [syncState,setSyncState]=useState("idle");       // idle|saving|saved|error|offline
+  const [authReady,setAuthReady]=useState(!hasSupabase);
+  const [synced,setSynced]=useState(false);
+  const [syncState,setSyncState]=useState("idle");
+  const [ownerUserId,setOwnerUserId]=useState(null); // set when logged in as a team member
   const syncTimer=useRef(null);
 
   // Track auth session
   useEffect(()=>{
     if(!hasSupabase)return;
     supabase.auth.getSession().then(({data})=>{setSession(data.session);setAuthReady(true);});
-    const {data:sub}=supabase.auth.onAuthStateChange((_e,s)=>{setSession(s);setAuthReady(true);if(!s)setSynced(false);});
+    const {data:sub}=supabase.auth.onAuthStateChange((_e,s)=>{setSession(s);setAuthReady(true);if(!s){setSynced(false);setOwnerUserId(null);}});
     return()=>sub.subscription.unsubscribe();
   },[]);
 
-  // On login: pull this user's data from the cloud (server is source of truth).
-  // Creates a default row on first sign-in, seeded from whatever is in state.
+  // On login: check team membership, then pull data.
   useEffect(()=>{
     if(!hasSupabase||!session){return;}
     let cancelled=false;
     (async()=>{
+      const uid=session.user.id;
+      const email=session.user.email;
+
+      // 1. Check if this user was invited as a team member (unclaimed invite).
+      //    If so, claim it by setting member_id.
+      const {data:unclaimed}=await supabase.from("team_members")
+        .select("owner_id").eq("member_email",email).is("member_id",null).maybeSingle();
+      if(unclaimed){
+        await supabase.from("team_members")
+          .update({member_id:uid,accepted_at:new Date().toISOString()})
+          .eq("owner_id",unclaimed.owner_id).eq("member_email",email);
+      }
+
+      // 2. Check if this user is an accepted team member of someone.
+      const {data:membership}=await supabase.from("team_members")
+        .select("owner_id").eq("member_id",uid).not("accepted_at","is",null).maybeSingle();
+      const dataUserId=membership?membership.owner_id:uid;
+      if(!cancelled)setOwnerUserId(membership?membership.owner_id:null);
+
+      // 3. Load data (owner's row if member, own row if owner).
       const {data,error}=await supabase.from("user_data")
-        .select("logs,recur,properties,attest").eq("user_id",session.user.id).maybeSingle();
+        .select("logs,recur,properties,attest").eq("user_id",dataUserId).maybeSingle();
       if(cancelled)return;
       if(error){setSyncState("error");return;}
-      if(!data){
-        await supabase.from("user_data").insert({user_id:session.user.id,logs,recur,properties,attest});
-      }else{
+      if(!data&&!membership){
+        await supabase.from("user_data").insert({user_id:uid,logs,recur,properties,attest});
+      }else if(data){
         setLogs((data.logs||[]).map(migrate));
         setRecur((data.recur||[]).map(migrate));
         if(Array.isArray(data.properties)&&data.properties.length)setProperties(data.properties);
@@ -667,19 +687,19 @@ export default function App(){
     return()=>{cancelled=true;};
   },[session]); // eslint-disable-line
 
-  // Push changes to the cloud (debounced). Guarded by `synced` so we never
-  // overwrite server data before the initial pull finishes.
+  // Push changes to cloud (debounced). Uses owner's row if member.
   useEffect(()=>{
     if(!hasSupabase||!session||!synced){return;}
+    const dataUserId=ownerUserId||session.user.id;
     setSyncState("saving");
     clearTimeout(syncTimer.current);
     syncTimer.current=setTimeout(async()=>{
       const {error}=await supabase.from("user_data")
-        .upsert({user_id:session.user.id,logs,recur,properties,attest},{onConflict:"user_id"});
+        .upsert({user_id:dataUserId,logs,recur,properties,attest},{onConflict:"user_id"});
       setSyncState(error?(navigator.onLine?"error":"offline"):"saved");
     },800);
     return()=>clearTimeout(syncTimer.current);
-  },[logs,recur,properties,attest,synced,session]); // eslint-disable-line
+  },[logs,recur,properties,attest,synced,session,ownerUserId]); // eslint-disable-line
 
   async function signOut(){if(hasSupabase)await supabase.auth.signOut();}
 
@@ -784,7 +804,7 @@ export default function App(){
         {view==="recur"&&<RecurView recur={recur} setRecur={setRecur} logs={logs} setLogs={setLogs} properties={properties} setProperties={setProperties}/>}
         {view==="summary"&&<SummaryView logs={logs} totalHrs={totalHrs} totalMs={totalMs} exportCSV={exportCSV}/>}
         {view==="attest"&&<AttestView logs={logs} totalHrs={totalHrs} attest={attest} setAttest={setAttest}/>}
-        {view==="account"&&<AccountView session={session} onSignOut={signOut}/>}
+        {view==="account"&&<AccountView session={session} ownerUserId={ownerUserId} onSignOut={signOut}/>}
       </div>
     </div>
   );
