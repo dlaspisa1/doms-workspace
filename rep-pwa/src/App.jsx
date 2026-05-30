@@ -38,6 +38,16 @@ const makeEmptyRf = () => ({category:"",activities:[],properties:[],description:
 function fmtDur(ms){const s=Math.floor(ms/1000),h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;}
 function fmtHrs(ms){return (ms/3600000).toFixed(2);}
 function todayStr(){return new Date().toISOString().split("T")[0];}
+// Display name: a name set on the account if present, otherwise a Title-Cased
+// version of the email's local part (e.g. "dominick" -> "Dominick").
+function displayName(user){
+  if(!user)return "";
+  const meta=user.user_metadata||{};
+  const name=(meta.full_name||meta.name||"").trim();
+  if(name)return name;
+  const local=(user.email||"").split("@")[0].replace(/[._-]+/g," ").trim();
+  return local.split(" ").filter(Boolean).map(w=>w[0].toUpperCase()+w.slice(1)).join(" ");
+}
 function weekKey(dateStr){const d=new Date(dateStr+"T00:00:00"),j=new Date(d.getFullYear(),0,1);return `${d.getFullYear()}-W${String(Math.ceil(((d-j)/86400000+j.getDay()+1)/7)).padStart(2,"0")}`;}
 function weeksSince(start,end){const dates=[],s=new Date(start+"T00:00:00"),cap=end?new Date(end+"T00:00:00"):new Date(todayStr()+"T00:00:00");let c=new Date(s);while(c<=cap){dates.push(c.toISOString().split("T")[0]);c.setDate(c.getDate()+7);}return dates;}
 function fmtDate(str){if(!str)return "";const[y,m,d]=str.split("-");return `${m}/${d}/${y}`;}
@@ -715,6 +725,19 @@ export default function App(){
     }
   }
 
+  // Global sign-out: revokes EVERY session/device for this account (scope:'global').
+  // Use this to kick out anyone who got hold of a session token.
+  async function signOutEverywhere(){
+    if(!hasSupabase)return;
+    try{
+      await supabase.auth.signOut({scope:'global'});
+    }catch(e){
+      console.warn('signOutEverywhere error',e);
+    }finally{
+      setSession(null);setSynced(false);setOwnerUserId(null);
+    }
+  }
+
   // localStorage acts as an instant-paint offline cache.
   useEffect(()=>{LS.set("rep_logs",logs);},[logs]);
   useEffect(()=>{LS.set("rep_recur",recur);},[recur]);
@@ -781,6 +804,7 @@ export default function App(){
           <div>
             <div style={{fontSize:9,letterSpacing:"0.25em",textTransform:"uppercase",color:"#AC9E86",marginBottom:2}}>DFM Capital LLC</div>
             <div style={{fontSize:18,color:"#E8E2D8",lineHeight:1.1}}>REP Hour Log</div>
+            {hasSupabase&&session&&<div style={{fontSize:11,color:"#C8A96E",marginTop:3}}>{displayName(session.user)}</div>}
           </div>
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:28,fontWeight:"bold",color:"#C8A96E",lineHeight:1}}>{totalHrs.toFixed(1)}<span style={{fontSize:12,color:"#C8BCA4",marginLeft:3}}>/ 750h</span></div>
@@ -816,7 +840,7 @@ export default function App(){
         {view==="recur"&&<RecurView recur={recur} setRecur={setRecur} logs={logs} setLogs={setLogs} properties={properties} setProperties={setProperties}/>}
         {view==="summary"&&<SummaryView logs={logs} totalHrs={totalHrs} totalMs={totalMs} exportCSV={exportCSV}/>}
         {view==="attest"&&<AttestView logs={logs} totalHrs={totalHrs} attest={attest} setAttest={setAttest}/>}
-        {view==="account"&&<AccountView session={session} ownerUserId={ownerUserId} onSignOut={signOut}/>}
+        {view==="account"&&<AccountView session={session} ownerUserId={ownerUserId} onSignOut={signOut} onSignOutEverywhere={signOutEverywhere}/>}
       </div>
     </div>
   );

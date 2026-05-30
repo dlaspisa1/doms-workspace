@@ -141,8 +141,18 @@ function TeamSection({ session, ownerUserId }) {
   );
 }
 
-export default function AccountView({ session, ownerUserId, onSignOut }) {
+function displayName(user) {
+  if (!user) return "";
+  const meta = user.user_metadata || {};
+  const name = (meta.full_name || meta.name || "").trim();
+  if (name) return name;
+  const local = (user.email || "").split("@")[0].replace(/[._-]+/g, " ").trim();
+  return local.split(" ").filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(" ");
+}
+
+export default function AccountView({ session, ownerUserId, onSignOut, onSignOutEverywhere }) {
   const email = session?.user?.email || "";
+  const name = displayName(session?.user);
 
   const [newEmail, setNewEmail] = useState("");
   const [emailMsg, setEmailMsg] = useState("");
@@ -210,6 +220,7 @@ export default function AccountView({ session, ownerUserId, onSignOut }) {
     <div className="scroll-area" style={{ height:"100%", paddingBottom:32 }}>
       <div style={{ padding:"16px 16px 8px" }}>
         <div style={{ fontSize:10, letterSpacing:"0.25em", textTransform:"uppercase", color:"#C8BCA4" }}>Account</div>
+        {name && <div style={{ fontSize:18, color:"#E8E2D8", marginTop:6, lineHeight:1.1 }}>{name}</div>}
         <div style={{ fontSize:12, color:"#AC9E86", marginTop:4 }}>Signed in as <span style={{ color:"#E8E2D8" }}>{email}</span></div>
       </div>
 
@@ -218,6 +229,8 @@ export default function AccountView({ session, ownerUserId, onSignOut }) {
         <Section title="Session">
           <div style={{ fontSize:12, color:"#AC9E86" }}>Sign out on this device. Your data stays saved in the cloud.</div>
           <Btn onClick={onSignOut} variant="ghost">Sign Out</Btn>
+          <div style={{ fontSize:12, color:"#AC9E86", marginTop:14 }}>Lost a device, or shared a link by mistake? This signs out <b>every</b> device and revokes all active sessions.</div>
+          <Btn onClick={onSignOutEverywhere} variant="red">Sign Out All Devices</Btn>
         </Section>
 
         <TeamSection session={session} ownerUserId={ownerUserId} />
