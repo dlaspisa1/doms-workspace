@@ -701,7 +701,19 @@ export default function App(){
     return()=>clearTimeout(syncTimer.current);
   },[logs,recur,properties,attest,synced,session,ownerUserId]); // eslint-disable-line
 
-  async function signOut(){if(hasSupabase)await supabase.auth.signOut();}
+  async function signOut(){
+    if(!hasSupabase)return;
+    try{
+      // scope:'local' clears this device's session without a server round-trip
+      // that can hang/fail (offline, expired token) and leave you stuck signed in.
+      await supabase.auth.signOut({scope:'local'});
+    }catch(e){
+      console.warn('signOut error',e);
+    }finally{
+      // Fallback: always drop back to the login screen even if the call errored.
+      setSession(null);setSynced(false);setOwnerUserId(null);
+    }
+  }
 
   // localStorage acts as an instant-paint offline cache.
   useEffect(()=>{LS.set("rep_logs",logs);},[logs]);

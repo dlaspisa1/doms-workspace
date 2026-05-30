@@ -199,7 +199,7 @@ export default function AccountView({ session, ownerUserId, onSignOut }) {
     setDeleteBusy(true);
     try {
       await supabase.from("user_data").delete().eq("user_id", session.user.id);
-      await supabase.auth.signOut();
+      await onSignOut();
     } catch (e) {
       setDeleteErr(e.message || "Could not delete account.");
       setDeleteBusy(false);
