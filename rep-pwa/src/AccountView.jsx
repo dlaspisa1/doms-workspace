@@ -152,7 +152,29 @@ function displayName(user) {
 
 export default function AccountView({ session, ownerUserId, onSignOut, onSignOutEverywhere }) {
   const email = session?.user?.email || "";
-  const name = displayName(session?.user);
+  // The user's saved display name (user_metadata.full_name), falling back to
+  // an email-derived guess only as a placeholder.
+  const savedName = (session?.user?.user_metadata?.full_name || "").trim();
+  const name = savedName || displayName(session?.user);
+
+  const [nameField, setNameField] = useState(savedName);
+  const [nameMsg, setNameMsg] = useState("");
+  const [nameErr, setNameErr] = useState("");
+  const [nameBusy, setNameBusy] = useState(false);
+
+  async function saveName() {
+    setNameMsg(""); setNameErr("");
+    setNameBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ data: { full_name: nameField.trim() } });
+      if (error) throw error;
+      setNameMsg("Name saved.");
+    } catch (e) {
+      setNameErr(e.message || "Could not save name.");
+    } finally {
+      setNameBusy(false);
+    }
+  }
 
   const [newEmail, setNewEmail] = useState("");
   const [emailMsg, setEmailMsg] = useState("");
@@ -231,6 +253,15 @@ export default function AccountView({ session, ownerUserId, onSignOut, onSignOut
           <Btn onClick={onSignOut} variant="ghost">Sign Out</Btn>
           <div style={{ fontSize:12, color:"#AC9E86", marginTop:14 }}>Lost a device, or shared a link by mistake? This signs out <b>every</b> device and revokes all active sessions.</div>
           <Btn onClick={onSignOutEverywhere} variant="red">Sign Out All Devices</Btn>
+        </Section>
+
+        <Section title="Display Name">
+          <div style={{ fontSize:12, color:"#AC9E86", marginBottom:8 }}>Shown on the home screen and here. This is the name attributed to your logged hours.</div>
+          <label style={labelSt}>Your Name</label>
+          <input type="text" value={nameField} onChange={e=>setNameField(e.target.value)} style={inputSt} placeholder="e.g. Dominick La Spisa" />
+          {nameErr && <div style={{ fontSize:12, color:"#C87E8A", marginTop:10 }}>{nameErr}</div>}
+          {nameMsg && <div style={{ fontSize:12, color:"#7EB8A4", marginTop:10 }}>{nameMsg}</div>}
+          <Btn onClick={saveName} disabled={nameBusy || !nameField.trim() || nameField.trim()===savedName}>{nameBusy ? "Saving…" : "Save Name"}</Btn>
         </Section>
 
         <TeamSection session={session} ownerUserId={ownerUserId} />

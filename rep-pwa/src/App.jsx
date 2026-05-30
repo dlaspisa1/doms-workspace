@@ -31,7 +31,7 @@ const DEFAULT_PROPERTIES = [
 ];
 
 const makeEmptyForm = () => ({editingId:null,category:"",activities:[],properties:[],description:"",notes:"",date:todayStr(),endDate:"",mh:"",mm:""});
-const makeEmptyRf = () => ({category:"",activities:[],properties:[],description:"",notes:"",hours:"",minutes:"",startDate:todayStr(),endDate:""});
+const makeEmptyRf = () => ({category:"",activities:[],properties:[],description:"",notes:"",hours:"",minutes:"",startDate:todayStr(),endDate:"",freq:"weekly"});
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -50,6 +50,11 @@ function displayName(user){
 }
 function weekKey(dateStr){const d=new Date(dateStr+"T00:00:00"),j=new Date(d.getFullYear(),0,1);return `${d.getFullYear()}-W${String(Math.ceil(((d-j)/86400000+j.getDay()+1)/7)).padStart(2,"0")}`;}
 function weeksSince(start,end){const dates=[],s=new Date(start+"T00:00:00"),cap=end?new Date(end+"T00:00:00"):new Date(todayStr()+"T00:00:00");let c=new Date(s);while(c<=cap){dates.push(c.toISOString().split("T")[0]);c.setDate(c.getDate()+7);}return dates;}
+// Monthly cadence: one date per month from start through end (or today),
+// pinned to the start date's day-of-month. Used by monthly recurring tasks.
+function monthsSince(start,end){const dates=[],s=new Date(start+"T00:00:00"),cap=end?new Date(end+"T00:00:00"):new Date(todayStr()+"T00:00:00");const day=s.getDate();let c=new Date(s.getFullYear(),s.getMonth(),day);while(c<=cap){dates.push(c.toISOString().split("T")[0]);c=new Date(c.getFullYear(),c.getMonth()+1,day);}return dates;}
+// Pick the right occurrence generator for a task based on its frequency.
+function occurrences(task){return (task.freq==="monthly"?monthsSince:weeksSince)(task.startDate,task.endDate);}
 function fmtDate(str){if(!str)return "";const[y,m,d]=str.split("-");return `${m}/${d}/${y}`;}
 function fmtRange(start,end){if(!end||end===start)return fmtDate(start);return `${fmtDate(start)} – ${fmtDate(end)}`;}
 
@@ -387,7 +392,7 @@ function RecurView({recur,setRecur,logs,setLogs,properties,setProperties}){
   function addRecur(){
     const ms=(parseInt(rf.hours||0)*60+parseInt(rf.minutes||0))*60000;
     if(!rfReady||!ms||!rf.description)return;
-    setRecur(p=>[...p,{id:Date.now(),category:rf.category,activities:rf.activities,properties:rf.properties,description:rf.description,notes:rf.notes,durationMs:ms,startDate:rf.startDate,endDate:rf.endDate||""}]);
+    setRecur(p=>[...p,{id:Date.now(),category:rf.category,activities:rf.activities,properties:rf.properties,description:rf.description,notes:rf.notes,durationMs:ms,startDate:rf.startDate,endDate:rf.endDate||"",freq:rf.freq||"weekly"}]);
     setRf(makeEmptyRf());
     setShowForm(false);
   }
@@ -396,8 +401,8 @@ function RecurView({recur,setRecur,logs,setLogs,properties,setProperties}){
     <div className="scroll-area" style={{height:"100%",paddingBottom:20}}>
       <div style={{padding:"16px 16px 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div>
-          <div style={{fontSize:10,letterSpacing:"0.25em",textTransform:"uppercase",color:"#C8BCA4"}}>Weekly Recurring Tasks</div>
-          <div style={{fontSize:11,color:"#AC9E86",marginTop:4}}>Auto-logged every week from start date</div>
+          <div style={{fontSize:10,letterSpacing:"0.25em",textTransform:"uppercase",color:"#C8BCA4"}}>Recurring Tasks</div>
+          <div style={{fontSize:11,color:"#AC9E86",marginTop:4}}>Auto-logged weekly or monthly as time passes</div>
         </div>
         <button onClick={()=>setShowForm(!showForm)} style={{background:showForm?"#2A2820":"#C8A96E",color:showForm?"#C8BCA4":"#0F0E0C",border:"none",borderRadius:6,padding:"9px 14px",fontSize:11,letterSpacing:"0.15em",textTransform:"uppercase",cursor:"pointer"}}>
           {showForm?"Cancel":"+ Add"}
@@ -428,6 +433,16 @@ function RecurView({recur,setRecur,logs,setLogs,properties,setProperties}){
             selected={rf.properties}
             setSelected={arr=>setRf(f=>({...f,properties:arr}))}
           />
+          <label style={labelSt}>Frequency</label>
+          <div style={{display:"flex",gap:8,marginBottom:4}}>
+            {[["weekly","↻ Weekly"],["monthly","↻ Monthly"]].map(([val,lbl])=>(
+              <button key={val} type="button" onClick={()=>setRf(f=>({...f,freq:val}))}
+                style={{flex:1,padding:"10px",borderRadius:6,fontSize:12,cursor:"pointer",fontFamily:"inherit",
+                  border:`1px solid ${rf.freq===val?"#C8A96E":"#2A2820"}`,
+                  background:rf.freq===val?"#C8A96E":"#0A0908",
+                  color:rf.freq===val?"#0F0E0C":"#C8BCA4"}}>{lbl}</button>
+            ))}
+          </div>
           <div style={{display:"flex",gap:10}}>
             <div style={{flex:1}}>
               <label style={labelSt}>Start Date</label>
@@ -439,8 +454,8 @@ function RecurView({recur,setRecur,logs,setLogs,properties,setProperties}){
             </div>
           </div>
           <div style={{display:"flex",gap:10}}>
-            <div style={{flex:1}}><label style={labelSt}>Hours / week</label><input type="number" min="0" value={rf.hours} onChange={e=>setRf(f=>({...f,hours:e.target.value}))} style={inputSt} placeholder="0"/></div>
-            <div style={{flex:1}}><label style={labelSt}>Minutes / week</label><input type="number" min="0" max="59" value={rf.minutes} onChange={e=>setRf(f=>({...f,minutes:e.target.value}))} style={inputSt} placeholder="0"/></div>
+            <div style={{flex:1}}><label style={labelSt}>Hours / {rf.freq==="monthly"?"month":"week"}</label><input type="number" min="0" value={rf.hours} onChange={e=>setRf(f=>({...f,hours:e.target.value}))} style={inputSt} placeholder="0"/></div>
+            <div style={{flex:1}}><label style={labelSt}>Minutes / {rf.freq==="monthly"?"month":"week"}</label><input type="number" min="0" max="59" value={rf.minutes} onChange={e=>setRf(f=>({...f,minutes:e.target.value}))} style={inputSt} placeholder="0"/></div>
           </div>
           <label style={{...labelSt,color:"#C8A96E"}}>★ Description of Work Done <span style={{color:"#C87E8A"}}>*</span></label>
           <textarea value={rf.description} onChange={e=>setRf(f=>({...f,description:e.target.value}))} placeholder="e.g. Weekly rent roll review, verify HAP payments, log discrepancies, follow up on late items" style={{...inputSt,height:80,resize:"none",lineHeight:1.5}}/>
@@ -460,23 +475,25 @@ function RecurView({recur,setRecur,logs,setLogs,properties,setProperties}){
       <div style={{display:"flex",flexDirection:"column",gap:8,padding:"8px 16px"}}>
         {recur.map(task=>{
           const cat=CATEGORIES.find(c=>c.id===task.category);
-          const weeks=weeksSince(task.startDate,task.endDate);
+          const isMonthly=task.freq==="monthly";
+          const occ=occurrences(task);
+          const unit=isMonthly?"month":"week";
           return(
             <div key={task.id} style={{...cardSt,padding:"14px 16px",borderLeft:`3px solid ${cat?.color||"#C8A96E"}`}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:6}}>
-                    <Tag color="#7EB8A4" bg="#1E2820">↻ weekly</Tag>
+                    <Tag color="#7EB8A4" bg="#1E2820">↻ {isMonthly?"monthly":"weekly"}</Tag>
                     <span style={{fontSize:11,color:cat?.color}}>{cat?.icon} {cat?.label}</span>
                   </div>
                   <div style={{fontSize:14,color:"#E8E2D8",marginBottom:3,lineHeight:1.35}}>{(task.activities||[]).join(" · ")}</div>
                   <div style={{fontSize:11,color:"#B8A890",marginBottom:6,lineHeight:1.35}}>{(task.properties||[]).join(" · ")}</div>
                   {task.description&&<div style={{fontSize:12,color:"#B8C8B0",lineHeight:1.5,borderLeft:"2px solid #2A3828",paddingLeft:10,marginBottom:6}}>{task.description}</div>}
-                  <div style={{fontSize:10,color:"#968666"}}>{task.endDate?`${fmtDate(task.startDate)} – ${fmtDate(task.endDate)}`:`Since ${fmtDate(task.startDate)}`} · {weeks.length} week{weeks.length!==1?"s":""} · {fmtHrs(task.durationMs*weeks.length)} hrs total</div>
+                  <div style={{fontSize:10,color:"#968666"}}>{task.endDate?`${fmtDate(task.startDate)} – ${fmtDate(task.endDate)}`:`Since ${fmtDate(task.startDate)}`} · {occ.length} {unit}{occ.length!==1?"s":""} · {fmtHrs(task.durationMs*occ.length)} hrs total</div>
                 </div>
                 <div style={{textAlign:"right",flexShrink:0,marginLeft:12}}>
                   <div style={{fontSize:20,color:"#C8A96E"}}>{fmtHrs(task.durationMs)}h</div>
-                  <div style={{fontSize:9,color:"#AC9E86",letterSpacing:"0.1em",textTransform:"uppercase"}}>/ week</div>
+                  <div style={{fontSize:9,color:"#AC9E86",letterSpacing:"0.1em",textTransform:"uppercase"}}>/ {unit}</div>
                   <button onClick={()=>{setRecur(p=>p.filter(t=>t.id!==task.id));setLogs(p=>p.filter(l=>l.recurId!==task.id));}} style={{marginTop:8,background:"none",border:"1px solid #2A2820",color:"#C8BCA4",cursor:"pointer",fontSize:9,padding:"4px 8px",borderRadius:3,letterSpacing:"0.1em",textTransform:"uppercase"}}>Remove</button>
                 </div>
               </div>
@@ -814,10 +831,13 @@ export default function App(){
     if(!recur.length)return;
     const newEntries=[];
     recur.forEach(task=>{
-      weeksSince(task.startDate,task.endDate).forEach(date=>{
+      occurrences(task).forEach(date=>{
         const wk=weekKey(date);
-        if(!logs.some(l=>l.recurId===task.id&&l.wk===wk)){
-          newEntries.push({id:Date.now()+Math.random(),date,category:task.category,activities:task.activities||[],properties:task.properties||[],description:task.description,notes:task.notes,durationMs:task.durationMs,method:"recurring",recurId:task.id,wk});
+        // Monthly tasks key off the year-month so each month logs once;
+        // weekly tasks key off the ISO week as before.
+        const occKey=task.freq==="monthly"?date.slice(0,7):wk;
+        if(!logs.some(l=>l.recurId===task.id&&(l.occKey||l.wk)===occKey)){
+          newEntries.push({id:Date.now()+Math.random(),date,category:task.category,activities:task.activities||[],properties:task.properties||[],description:task.description,notes:task.notes,durationMs:task.durationMs,method:"recurring",recurId:task.id,wk,occKey});
         }
       });
     });
