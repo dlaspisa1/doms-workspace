@@ -628,6 +628,48 @@ function migrate(entry){
   };
 }
 
+// Shown when a user opens a password-reset link. The recovery session is
+// already established; here they just set a new password.
+function ResetPassword({onDone,onCancel}){
+  const [pw,setPw]=useState("");
+  const [pw2,setPw2]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [err,setErr]=useState("");
+  const [msg,setMsg]=useState("");
+  const inputSt={width:"100%",background:"#0A0908",border:"1px solid #2A2820",borderRadius:6,color:"#E8E2D8",padding:"12px",fontSize:15,outline:"none",fontFamily:"inherit"};
+  const labelSt={display:"block",fontSize:10,letterSpacing:"0.2em",textTransform:"uppercase",color:"#C8BCA4",marginBottom:6,marginTop:16};
+  async function submit(e){
+    e?.preventDefault();setErr("");setMsg("");
+    if(pw.length<6){setErr("Password must be at least 6 characters.");return;}
+    if(pw!==pw2){setErr("Passwords don't match.");return;}
+    setBusy(true);
+    try{
+      const {error}=await supabase.auth.updateUser({password:pw});
+      if(error)throw error;
+      setMsg("Password updated. You're all set.");
+      setTimeout(()=>onDone&&onDone(),900);
+    }catch(e2){setErr(e2.message||"Could not update password.");}
+    finally{setBusy(false);}
+  }
+  return(
+    <div style={{minHeight:"100vh",background:"#0F0E0C",color:"#E8E2D8",display:"flex",alignItems:"center",justifyContent:"center",padding:"24px",fontFamily:"Georgia, 'Times New Roman', serif"}}>
+      <form style={{width:"100%",maxWidth:380,background:"#161510",border:"1px solid #2A2820",borderRadius:12,padding:28}} onSubmit={submit}>
+        <div style={{fontSize:9,letterSpacing:"0.25em",textTransform:"uppercase",color:"#AC9E86",marginBottom:2}}>DFM Capital LLC</div>
+        <div style={{fontSize:22,color:"#E8E2D8",lineHeight:1.1}}>Set a New Password</div>
+        <div style={{fontSize:12,color:"#AC9E86",marginTop:6}}>Choose a new password for your account.</div>
+        <label style={labelSt}>New Password</label>
+        <input type="password" autoComplete="new-password" value={pw} onChange={e=>setPw(e.target.value)} style={inputSt} placeholder="••••••••"/>
+        <label style={labelSt}>Confirm Password</label>
+        <input type="password" autoComplete="new-password" value={pw2} onChange={e=>setPw2(e.target.value)} style={inputSt} placeholder="••••••••"/>
+        {err&&<div style={{fontSize:12,color:"#C87E8A",marginTop:12}}>{err}</div>}
+        {msg&&<div style={{fontSize:12,color:"#7EB8A4",marginTop:12}}>{msg}</div>}
+        <button type="submit" disabled={busy} style={{width:"100%",marginTop:20,padding:"13px",border:"none",borderRadius:6,fontSize:12,letterSpacing:"0.2em",textTransform:"uppercase",cursor:busy?"not-allowed":"pointer",background:busy?"#1A1810":"#C8A96E",color:busy?"#7A6A50":"#0F0E0C",fontFamily:"inherit"}}>{busy?"…":"Update Password"}</button>
+        <button type="button" onClick={onCancel} style={{width:"100%",marginTop:12,background:"none",border:"none",color:"#AC9E86",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+      </form>
+    </div>
+  );
+}
+
 export default function App(){
   const [logs,setLogs]=useState(()=>LS.get("rep_logs",[]).map(migrate));
   const [recur,setRecur]=useState(()=>LS.get("rep_recur",[]).map(migrate));
@@ -645,13 +687,36 @@ export default function App(){
   const [synced,setSynced]=useState(false);
   const [syncState,setSyncState]=useState("idle");
   const [ownerUserId,setOwnerUserId]=useState(null); // set when logged in as a team member
+  const [recovery,setRecovery]=useState(false); // true while completing a password-reset link
   const syncTimer=useRef(null);
 
   // Track auth session
   useEffect(()=>{
     if(!hasSupabase)return;
+
+    // Password-reset links arrive as #access_token=...&type=recovery. We keep
+    // detectSessionInUrl:false (so a copied session URL can't silently log
+    // anyone in), and instead honor the URL tokens ONLY when type=recovery —
+    // establishing a short-lived session just long enough to set a new password.
+    const hash=window.location.hash.startsWith("#")?window.location.hash.slice(1):"";
+    const hp=new URLSearchParams(hash);
+    if(hp.get("type")==="recovery"&&hp.get("access_token")){
+      setRecovery(true);
+      supabase.auth.setSession({
+        access_token:hp.get("access_token"),
+        refresh_token:hp.get("refresh_token")||"",
+      }).then(({data})=>{setSession(data.session);setAuthReady(true);})
+        .catch(()=>setAuthReady(true));
+      // Strip the tokens from the address bar so they aren't left in history.
+      window.history.replaceState(null,"",window.location.pathname+window.location.search);
+      return;
+    }
+
     supabase.auth.getSession().then(({data})=>{setSession(data.session);setAuthReady(true);});
-    const {data:sub}=supabase.auth.onAuthStateChange((_e,s)=>{setSession(s);setAuthReady(true);if(!s){setSynced(false);setOwnerUserId(null);}});
+    const {data:sub}=supabase.auth.onAuthStateChange((e,s)=>{
+      if(e==="PASSWORD_RECOVERY")setRecovery(true);
+      setSession(s);setAuthReady(true);if(!s){setSynced(false);setOwnerUserId(null);}
+    });
     return()=>sub.subscription.unsubscribe();
   },[]);
 
@@ -787,6 +852,10 @@ export default function App(){
   // Auth gate (only when cloud is configured)
   if(hasSupabase&&!authReady){
     return <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0F0E0C",color:"#AC9E86",fontFamily:"Georgia,serif",fontSize:13,letterSpacing:"0.15em",textTransform:"uppercase"}}>Loading…</div>;
+  }
+  // Completing a password-reset link: show the set-new-password screen.
+  if(hasSupabase&&recovery&&session){
+    return <ResetPassword onDone={()=>{setRecovery(false);}} onCancel={async()=>{setRecovery(false);await signOut();}}/>;
   }
   if(hasSupabase&&!session){
     return <Auth/>;

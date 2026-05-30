@@ -49,7 +49,11 @@ export default function Auth() {
     if (!email.trim()) { setErr("Enter your email first, then tap reset."); return; }
     setBusy(true);
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: window.location.origin });
+      // Always send people back to the deployed app, never to a dev URL like
+      // localhost:3000 (which is what window.location.origin would be if the
+      // reset was requested from a local build).
+      const SITE_URL = "https://rep-pwa.vercel.app";
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: SITE_URL });
       if (error) throw error;
       setMsg("Password reset link sent — check your email.");
     } catch (e2) {
