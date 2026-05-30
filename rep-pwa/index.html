@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="REP Log"/>
+  <meta name="theme-color" content="#C8A96E"/>
+  <meta name="description" content="Real Estate Professional hour log — IRS §469(c)(7)"/>
+  <title>REP Hour Tracker</title>
+  <link rel="manifest" href="/manifest.json"/>
+
+  <!-- Apple touch icon (inline SVG data URI) -->
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%230F0E0C'/%3E%3Ctext x='90' y='125' font-size='90' text-anchor='middle' fill='%23C8A96E'%3E⌚%3C/text%3E%3C/svg%3E"/>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body {
+      background: #0F0E0C;
+      color: #E8E2D8;
+      font-family: Georgia, 'Times New Roman', serif;
+      -webkit-font-smoothing: antialiased;
+      overscroll-behavior: none;
+    }
+    /* iOS safe area padding */
+    #root { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+
+    input, select, textarea, button {
+      font-family: Georgia, 'Times New Roman', serif;
+      -webkit-appearance: none;
+      border-radius: 4px;
+    }
+    select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238A7E6A' stroke-width='1.5' fill='none'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px !important; }
+
+    /* Prevent double-tap zoom on iOS buttons */
+    button { touch-action: manipulation; }
+
+    /* Scrollable content area */
+    .scroll-area { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+    /* Top nav bar */
+    .top-nav {
+      background: #161510;
+      border-bottom: 1px solid #2A2820;
+      display: flex;
+      flex-shrink: 0;
+    }
+    .nav-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 4px 8px;
+      gap: 4px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: #AC9E86;
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      transition: color 0.15s;
+    }
+    .nav-item.active { color: #C8A96E; }
+    .nav-icon { font-size: 20px; line-height: 1; }
+
+    /* Install banner */
+    #install-banner {
+      display: none;
+      position: fixed;
+      bottom: calc(16px + env(safe-area-inset-bottom));
+      left: 16px; right: 16px;
+      background: #1E1C18;
+      border: 1px solid #C8A96E;
+      border-radius: 10px;
+      padding: 14px 16px;
+      z-index: 200;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    #install-banner.show { display: flex; align-items: center; gap: 12px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Install to home screen banner -->
+<div id="install-banner">
+  <div style="flex:1">
+    <div style="font-size:13px;color:#E8E2D8;margin-bottom:3px;">Add to Home Screen</div>
+    <div style="font-size:11px;color:#C8BCA4;">Install for offline access & native feel</div>
+  </div>
+  <button id="install-btn" style="background:#C8A96E;color:#0F0E0C;border:none;padding:8px 14px;border-radius:4px;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;">Install</button>
+  <button id="install-dismiss" style="background:none;border:none;color:#AC9E86;font-size:18px;cursor:pointer;padding:0 4px;">×</button>
+</div>
+
+<script type="module" src="/src/main.jsx"></script>
+</body>
+</html>
