@@ -99,6 +99,16 @@ THREAT_KEYWORDS = [
     "penalty",
 ]
 
+# Risk-scoring policy constants. See score_email() for how these interact.
+# DEFAULT_HIGH_RISK_THRESHOLD: score at or above which a message is auto-trashed.
+# TECHNICAL_EVIDENCE_FLOOR: minimum technical (non-language) score that must be present before a
+#   message is even eligible for auto-trash. Chosen to sit above the weak structural signals
+#   (8-15 pts each) and at/below the genuine red flags (shortener 25, sender spoof 30, IP host 35).
+# CONTENT_ONLY_CAP: ceiling on language-derived score when technical evidence is weak or absent.
+DEFAULT_HIGH_RISK_THRESHOLD = 70
+TECHNICAL_EVIDENCE_FLOOR = 25
+CONTENT_ONLY_CAP = 55
+
 SUSPICIOUS_DOMAIN_PATTERNS = [
     ".tk",
     ".ml",
@@ -136,6 +146,8 @@ TRACKING_DOMAINS = {
     "constantcontact.com",
     "salesforce.com",
     "marketo.com",
+    "resend.com",
+    "resend-links.com",
 }
 
 SHORTENER_DOMAINS = {
@@ -808,18 +820,26 @@ def analyze_single_url(
             score += 15
             reasons.append(f"Sender/link domain mismatch: {sender_base} -> {host_base}")
 
-    if is_suspicious_domain(host):
+    # Same reasoning as the structural checks below: match the pattern list against the
+    # registrable domain. Marketing/ESP hostnames legitimately contain tokens like
+    # "account-updates" or "secure-mail" in a SUBdomain the sender doesn't control the naming
+    # of; only the registrable domain tells us who actually owns the destination.
+    if is_suspicious_domain(host_base):
         score += 15
-        reasons.append(f"Suspicious domain pattern: {host}")
+        reasons.append(f"Suspicious domain pattern: {host_base}")
 
-    digit_ratio = (sum(char.isdigit() for char in host) / max(1, len(host)))
+    # Judge the registrable domain, not the full hostname: legitimate senders (ESP click-trackers,
+    # S3/CDN links, etc.) routinely use long hashed/region-coded subdomains that look "generated"
+    # but are normal infrastructure, not a phishing signal. A spoofed domain is fake at the
+    # registrable-domain level (e.g. "paypal-verify-secure.tk"), which host_base still catches.
+    digit_ratio = (sum(char.isdigit() for char in host_base) / max(1, len(host_base)))
     if digit_ratio >= 0.25:
         score += 8
         reasons.append("Domain has unusually high numeric content")
-    if host.count("-") >= 3:
+    if host_base.count("-") >= 3:
         score += 8
         reasons.append("Domain has excessive hyphen usage")
-    if len(host) >= 35:
+    if len(host_base) >= 35:
         score += 8
         reasons.append("Domain length unusually long")
 
@@ -829,9 +849,13 @@ def analyze_single_url(
         _, final_host, _, _ = canonicalize_url(final_url)
     except Exception:
         pass
-    if final_host and base_domain(final_host) != host_base:
+    final_base = base_domain(final_host) if final_host else ""
+    # A link that redirects back to the sender's own domain (the standard shape of email
+    # click-tracking) is a safety signal, not a risk signal -- only flag redirects that land
+    # somewhere unrelated to both the link's own domain and the sender.
+    if final_base and final_base != host_base and final_base != sender_base:
         score += 10
-        reasons.append(f"Redirects to different domain: {base_domain(final_host)}")
+        reasons.append(f"Redirects to different domain: {final_base}")
     if redirect_error:
         reasons.append(f"Redirect probe error: {redirect_error}")
 
@@ -875,37 +899,45 @@ def score_email(
     redirect_cache: dict[str, dict[str, Any]],
     intel_cache: dict[str, dict[str, Any]],
     domain_age_cache: dict[str, int | None],
+    auto_trash_threshold: int = DEFAULT_HIGH_RISK_THRESHOLD,
 ) -> tuple[int, list[str], list[dict[str, Any]]]:
-    score = 0
+    # Content signals (word choice: urgency, sensitive-data asks, threats) and technical signals
+    # (a spoofed-looking sender domain, a link that's actually dangerous) are scored separately.
+    # Ordinary bills, invoices, and account notices legitimately use urgent/financial vocabulary --
+    # that alone must never be enough to auto-trash a message. Only a real technical red flag can
+    # push a message into the auto-trash (high-risk) bucket; content signals alone are capped below
+    # it, so they still surface in the report for a human to look at.
+    content_score = 0
+    technical_score = 0
     reasons: list[str] = []
     sender_domain = extract_domain(sender)
     content = f"{subject or ''} {snippet or ''} {full_text or ''}".lower()
 
     if is_suspicious_domain(sender_domain):
-        score += 30
+        technical_score += 30
         reasons.append(f"Suspicious sender domain: {sender_domain}")
 
     urgent_count = sum(1 for kw in URGENT_KEYWORDS if kw in content)
     if urgent_count:
-        score += min(urgent_count * 15, 40)
+        content_score += min(urgent_count * 15, 40)
         reasons.append(f"Urgency language detected ({urgent_count})")
 
     sensitive_count = sum(1 for kw in SENSITIVE_REQUESTS if kw in content)
     if sensitive_count:
-        score += min(sensitive_count * 20, 50)
+        content_score += min(sensitive_count * 20, 50)
         reasons.append(f"Sensitive data request ({sensitive_count})")
 
     threat_count = sum(1 for kw in THREAT_KEYWORDS if kw in content)
     if threat_count:
-        score += min(threat_count * 25, 50)
+        content_score += min(threat_count * 25, 50)
         reasons.append(f"Threat language ({threat_count})")
 
     if any(greeting in content for greeting in ["dear customer", "dear user", "valued customer"]):
-        score += 10
+        content_score += 10
         reasons.append("Generic greeting")
 
     if "click here" in content or "verify now" in content:
-        score += 15
+        content_score += 15
         reasons.append("Suspicious call-to-action")
 
     link_findings = []
@@ -929,7 +961,7 @@ def score_email(
         if high_risk_link_count >= 2:
             aggregate_link_score += 10
             reasons.append("Multiple high-risk links detected")
-        score += min(aggregate_link_score, 70)
+        technical_score += min(aggregate_link_score, 70)
 
         highest_link = max(link_findings, key=lambda item: item.get("risk_score", 0))
         if highest_link.get("risk_score", 0) >= 35:
@@ -938,7 +970,24 @@ def score_email(
                 f" scored {highest_link.get('risk_score', 0)}"
             )
 
-    return min(score, 100), sorted(set(reasons)), link_findings
+    # Gate auto-trash on the STRENGTH of the technical evidence, not merely its presence.
+    # A single weak structural signal (an unusual-looking hostname, a high-risk TLD) is worth
+    # only 8-15 points and is common on legitimate mail; treating any nonzero technical score as
+    # a licence to auto-trash turns that noise into a cliff, where 15 points of hostname trivia
+    # unlock the full content range. Weak evidence therefore keeps the content cap AND is held
+    # below the auto-trash line -- such mail still surfaces in the report for a human to judge.
+    # Signals at or above the floor (spoofed sender 30, IP-address host 35, typosquat 30,
+    # shortener 25, threat-intel hit, freshly registered domain) are real red flags and pass.
+    if technical_score < TECHNICAL_EVIDENCE_FLOOR:
+        content_score = min(content_score, CONTENT_ONLY_CAP)
+        return (
+            min(technical_score + content_score, auto_trash_threshold - 1),
+            sorted(set(reasons)),
+            link_findings,
+        )
+
+    score = min(technical_score + content_score, 100)
+    return score, sorted(set(reasons)), link_findings
 
 
 def header_value(headers: list[dict[str, str]], name: str) -> str:
@@ -1136,7 +1185,7 @@ def run_cleanup(
     dry_run: bool = False,
     max_inbox: int = 500,
     max_spam: int = 500,
-    high_risk_threshold: int = 70,
+    high_risk_threshold: int = DEFAULT_HIGH_RISK_THRESHOLD,
     spam_older_than_days: int = 7,
     recipient: str | None = None,
 ) -> dict[str, Any]:
@@ -1167,6 +1216,7 @@ def run_cleanup(
                 redirect_cache=redirect_cache,
                 intel_cache=intel_cache,
                 domain_age_cache=domain_age_cache,
+                auto_trash_threshold=high_risk_threshold,
             )
 
             if metadata["urls"]:
@@ -1297,8 +1347,13 @@ def run_cleanup(
     timeout=1200,
 )
 def run_daily_cleanup():
+    # OBSERVATION MODE (set 2026-08-07 after the false-positive incident -- see
+    # directives/cleanup_gmail_inbox.md). The scorer fix is verified against real inbox data, but
+    # this job is re-entering service in report-only mode so the daily report emails can be read
+    # for a few days to confirm the false positives are gone. It scans and reports exactly as
+    # before but moves nothing. Flip to dry_run=False only after the reports look clean.
     return run_cleanup(
-        dry_run=False,
+        dry_run=True,
         max_inbox=120,
         max_spam=120,
     )
@@ -1313,7 +1368,7 @@ def run_now(
     dry_run: bool = False,
     max_inbox: int = 500,
     max_spam: int = 500,
-    high_risk_threshold: int = 70,
+    high_risk_threshold: int = DEFAULT_HIGH_RISK_THRESHOLD,
     spam_older_than_days: int = 7,
 ):
     return run_cleanup(

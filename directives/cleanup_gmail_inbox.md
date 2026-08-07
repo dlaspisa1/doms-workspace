@@ -100,6 +100,30 @@ To run phishing/spam cleanup automatically every week with report email:
    - Spam cleanup targets `in:spam older_than:7d`
    - Trash retention remains 30 days for recovery
 
+   **Content vs. technical scoring (added 2026-08-07 after a false-positive incident).**
+   "High-risk" alone is NOT a sufficient safety guarantee — how the score is *composed* is what
+   makes auto-trash safe. `score_email()` keeps two separate tallies:
+
+   - **content_score** — language only: urgency words, sensitive-data phrases, threat words,
+     generic greetings, "click here". Ordinary bills, invoices, payment confirmations and
+     financial summaries legitimately use ALL of this vocabulary.
+   - **technical_score** — evidence about infrastructure: a spoofed-looking sender domain, a
+     link that is genuinely dangerous (IP-address host, typosquat, shortener, threat-intel hit,
+     freshly registered domain).
+
+   Two rules gate auto-trash (constants at the top of the script):
+   - `CONTENT_ONLY_CAP = 55` — when technical evidence is weak/absent, language score is capped
+     at 55, below the 70 auto-trash line. **Language alone can flag for review but can never
+     auto-trash.**
+   - `TECHNICAL_EVIDENCE_FLOOR = 25` — a message is only *eligible* for auto-trash once technical
+     signals reach 25. Below that, the total is clamped to `threshold - 1`. This exists because
+     weak structural signals are worth only 8–15 points each and are common on legitimate mail;
+     without the floor, 15 points of hostname trivia would unlock the full content range and
+     re-open the exact failure this fixes.
+
+   Corollary for anyone tuning the scorer: **never add a language/keyword signal to
+   `technical_score`.** Doing so silently re-enables keyword-only auto-trash.
+
 ## Edge Cases
 1. **Rate Limits**: Gmail API has quota limits (250 quota units/user/second)
    - Implement exponential backoff
@@ -130,3 +154,22 @@ To run phishing/spam cleanup automatically every week with report email:
 - Weekly automation (Sunday 2 AM) provides good balance between keeping inbox clean and not overwhelming API
 - Cron logs are essential for debugging automated runs
 - Token refresh works automatically - no manual intervention needed for automation
+- **2026-08-07 false-positive incident.** The daily job (`dry_run=False`, 13:00 UTC) auto-trashed
+  three legitimate messages: a daily finance summary and two utility-bill payment confirmations.
+  Three independent defects each let ordinary mail reach the 70 auto-trash line:
+  1. Keyword-only scoring — normal bill vocabulary ("account number", "penalty") scored as
+     phishing with zero technical red flags. Fixed by the content/technical split above.
+  2. Structural link heuristics (digit ratio, hyphen count, length, suspicious-pattern list)
+     judged the FULL hostname, so legitimate ESP click-tracking subdomains read as generated
+     phishing domains. Fixed by judging `host_base` (registrable domain) instead — a spoofed
+     domain is fake at the registrable level, which `host_base` still catches.
+  3. A link redirecting back to the sender's own domain — the normal shape of click tracking —
+     was scored as a risk signal. Fixed: only flag redirects landing somewhere unrelated to
+     BOTH the link domain and the sender domain.
+  Also note: a finance summary listing portfolio holdings mentions brand names (apple, amazon,
+  coinbase...), which trips the sender/link brand-mismatch rule. The evidence floor contains it.
+- Verify scorer changes against REAL message bodies pulled from the live inbox, not snippets —
+  the false positives were only reproducible with full body text.
+- The Gmail *connector* (MCP) is read-only and cannot untrash. To restore messages, use local
+  `token.json` (has `gmail.modify`) with `messages().modify()`:
+  `removeLabelIds=["TRASH"], addLabelIds=["INBOX"]`. Other labels (UNREAD etc.) are preserved.
