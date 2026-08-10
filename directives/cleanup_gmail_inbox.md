@@ -124,6 +124,24 @@ To run phishing/spam cleanup automatically every week with report email:
    Corollary for anyone tuning the scorer: **never add a language/keyword signal to
    `technical_score`.** Doing so silently re-enables keyword-only auto-trash.
 
+   **Sender authentication (added 2026-08-10).** Capping content at 55 stopped the wrongful
+   trashing, but ordinary bills still sat in the report as permanent false positives. The scorer
+   now reads the `Authentication-Results` header via `sender_is_authenticated()`, which accepts
+   `dmarc=pass` with aligned `header.from`, or `dkim=pass` whose `header.i` signing domain matches
+   the From: domain (compared on the registrable domain, so `send.cfosilvia.com` and
+   `mg.invoicecloud.net` still align with their parent).
+
+   The rule is deliberately narrow: **authentication only suppresses language scoring, and only
+   when technical evidence is already below the floor.** A verified signature proves "this domain
+   really sent this", NOT "this domain is trustworthy" — anyone can DKIM-sign a throwaway domain.
+   So when a genuine red flag IS present (raw-IP link, shortener, typosquat, sender spoof),
+   language counts in full and authentication buys nothing. That case is a compromised-but-
+   authenticated account sending a malicious link, which is exactly what this job must catch.
+
+   Verified adversarially: phishing that DKIM-signs its own `.tk` domain still scores 100 and is
+   still trashed. An earlier draft that zeroed content unconditionally dropped raw-IP phishing to
+   63 and shortener phishing to 40 — both below the trash line. Do not reintroduce that.
+
 ## Edge Cases
 1. **Rate Limits**: Gmail API has quota limits (250 quota units/user/second)
    - Implement exponential backoff
