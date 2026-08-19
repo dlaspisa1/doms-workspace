@@ -1,6 +1,6 @@
 # Agent Instructions
 
-> This file is mirrored across CLAUDE.md, AGENTS.md, and GEMINI.md so the same instructions load in any AI environment.
+> `AGENTS.md` is a symlink to this file so the same instructions load in any AI environment that looks for it. No `GEMINI.md` exists here.
 
 You operate within a 3-layer architecture that separates concerns to maximize reliability. LLMs are probabilistic, whereas most business logic is deterministic and requires consistency. This system fixes that mismatch.
 
@@ -95,6 +95,20 @@ The system supports event-driven execution via Modal webhooks. Each webhook maps
 **Available tools for webhooks:** `send_email`, `read_sheet`, `update_sheet`
 
 **All webhook activity streams to Slack in real-time.**
+
+## Agents
+
+Three real subagents live in `.claude/agents/`, spawnable by name via the Agent tool:
+
+| Agent | Domain |
+|-------|--------|
+| **cfo** | Personal QuickBooks (reconciliation, year-end close) + bitcoin dashboard |
+| **csp** | Code review for `execution/` scripts, the Modal webhook system, `rep-pwa/` |
+| **auditor** | Post-task quality review, logs to `tasks/lessons.md` |
+
+Routing config: `agents/registry.json`. Full rules: `directives/governance.md` (CLAUDE.md wins on any conflict).
+
+**Compliance gates (require explicit user approval):** any payment/transfer/transaction over $5,000, any credential change (API keys, OAuth, `.env`/`credentials.json`/token files), any deletion.
 
 ## Summary
 

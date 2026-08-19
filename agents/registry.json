@@ -1,0 +1,115 @@
+{
+  "version": "1.0",
+  "description": "Agent routing configuration for Dom's personal workspace. Personas are wired as real Claude Code subagents in .claude/agents/ — this file is the machine-readable source for gates and routing.",
+  "updated": "2026-08-19",
+
+  "agents": {
+    "cfo": {
+      "name": "Chief Financial Officer",
+      "domains": ["finance", "quickbooks", "bitcoin"],
+      "keywords": ["QBO", "QuickBooks", "reconcile", "bank", "transaction", "bitcoin", "btc", "wallet", "dashboard", "year-end", "close"],
+      "directives": [
+        "quickbooks_operations.md",
+        "qbo_year_end_close.md",
+        "bitcoin_dashboard.md"
+      ]
+    },
+    "csp": {
+      "name": "Chief Software Programmer",
+      "domains": ["code", "scripts", "automation", "webhooks", "rep-pwa"],
+      "keywords": ["script", "code", "bug", "error", "api", "automate", "python", "fix", "debug", "test", "oauth", "webhook", "modal", "rep-pwa"],
+      "directives": []
+    },
+    "auditor": {
+      "name": "Chief Audit Officer",
+      "domains": ["audit", "review", "quality", "learnings"],
+      "keywords": ["audit", "review", "improve", "check", "verify", "quality", "lessons", "learnings"],
+      "special": "Can run in parallel with any agent"
+    }
+  },
+
+  "routing": {
+    "priority": ["cfo", "csp", "auditor"],
+    "default": "csp",
+    "method": "highest_keyword_match"
+  },
+
+  "fast_path": {
+    "description": "Skip routing overhead for simple operations",
+    "criteria": [
+      "Single read-only action",
+      "No payment/transfer involved",
+      "No external system write",
+      "No compliance gate trigger"
+    ],
+    "examples": [
+      "Show QBO balance",
+      "Read a directive",
+      "Check script status",
+      "Check bitcoin price/holdings (read-only)"
+    ],
+    "skip": ["routing_ceremony", "learnings_check", "audit_logging"]
+  },
+
+  "lazy_learnings": {
+    "description": "Check learnings file only when needed",
+    "check_when": [
+      "First time entering domain this session",
+      "About to perform a write operation",
+      "Task matches keywords from past failures"
+    ],
+    "skip_for": [
+      "Read-only operations",
+      "Reports and status queries",
+      "Domain already checked this session"
+    ],
+    "source": "tasks/lessons.md (grep by integration/error keyword)"
+  },
+
+  "compliance_gates": {
+    "large_transaction": {
+      "trigger": "Payment, transfer, or transaction amount exceeds threshold",
+      "threshold": 5000,
+      "requires": "explicit_user_yes",
+      "agent": "cfo"
+    },
+    "credential_change": {
+      "trigger": "API keys, OAuth tokens, .env/credentials.json changes",
+      "requires": "explicit_user_yes",
+      "agent": "csp"
+    },
+    "deletion": {
+      "trigger": "Any delete operation",
+      "requires": "explicit_user_yes",
+      "agent": "any"
+    }
+  },
+
+  "audit_policy": {
+    "description": "Exception-based logging - don't log routine success",
+    "log_when": [
+      "Error or failure occurs",
+      "User corrects an action",
+      "Compliance gate triggers",
+      "New learning discovered"
+    ],
+    "skip_for": [
+      "Routine successful operations",
+      "Read-only queries",
+      "Standard reports"
+    ],
+    "destination": "tasks/lessons.md"
+  },
+
+  "parallel_execution": {
+    "safe_combinations": [
+      ["cfo", "csp"],
+      ["auditor", "*"]
+    ],
+    "never_parallel": [
+      "Two writes to same system",
+      "Dependent operations",
+      "Multiple payment/transfer operations"
+    ]
+  }
+}
