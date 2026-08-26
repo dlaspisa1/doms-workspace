@@ -109,6 +109,28 @@ DEFAULT_HIGH_RISK_THRESHOLD = 70
 TECHNICAL_EVIDENCE_FLOOR = 25
 CONTENT_ONLY_CAP = 55
 
+# Namespace/schema URIs that appear in raw HTML markup (xmlns=..., DTDs, Office schemas) but are
+# never links a human can click. Scraping them as "links" made every HTML newsletter look like it
+# pointed at an unrelated non-HTTPS domain -- pure noise that fed the sender/link mismatch and
+# non-HTTPS penalties.
+NON_LINK_URI_HOSTS = {
+    "w3.org",
+    "schemas.microsoft.com",
+    "schemas.openxmlformats.org",
+    "purl.org",
+    "xml.org",
+    "microsoft.com/office",
+}
+
+# Redirect destinations that are ordinary for marketing/newsletter mail. A tracking link landing
+# on a mainstream social or corporate site is the normal shape of a "follow us" button, not an
+# attacker bouncing a victim somewhere unexpected.
+COMMON_REDIRECT_DESTINATIONS = {
+    "twitter.com", "x.com", "facebook.com", "instagram.com", "linkedin.com", "youtube.com",
+    "tiktok.com", "outlook.com", "office.com", "google.com", "apple.com", "microsoft.com",
+    "spotify.com", "threads.net", "reddit.com", "discord.com", "telegram.org",
+}
+
 SUSPICIOUS_DOMAIN_PATTERNS = [
     ".tk",
     ".ml",
@@ -293,6 +315,12 @@ def base_domain(domain: str) -> str:
     return ".".join(parts[-2:])
 
 
+def is_non_link_uri(url: str) -> bool:
+    """True for XML namespace / schema URIs scraped out of raw markup (never clickable links)."""
+    lowered = (url or "").lower()
+    return any(f"//{host}/" in lowered or f"//www.{host}/" in lowered for host in NON_LINK_URI_HOSTS)
+
+
 def is_ip_host(hostname: str) -> bool:
     try:
         ipaddress.ip_address(hostname)
@@ -340,7 +368,11 @@ def extract_urls_from_html(html_text: str) -> set[str]:
         pass
     urls.update(parser.urls)
     urls.update(extract_urls_from_text(html_text))
-    return {url for url in urls if url.lower().startswith(("http://", "https://"))}
+    return {
+        url
+        for url in urls
+        if url.lower().startswith(("http://", "https://")) and not is_non_link_uri(url)
+    }
 
 
 def canonicalize_url(url: str) -> tuple[str, str, int | None, str]:
@@ -740,10 +772,9 @@ def is_suspicious_domain(domain: str) -> bool:
     if any(pattern in normalized for pattern in SUSPICIOUS_DOMAIN_PATTERNS):
         return True
 
-    base = base_domain(normalized)
-    if base in SHORTENER_DOMAINS:
-        return True
-
+    # NOTE: shorteners are deliberately NOT reported here. analyze_single_url() already scores
+    # them explicitly (+25); returning True as well double-counted the same fact as +40 and
+    # pushed ordinary newsletters that use bit.ly over the auto-trash line.
     return False
 
 
@@ -754,6 +785,7 @@ def analyze_single_url(
     redirect_cache: dict[str, dict[str, Any]],
     intel_cache: dict[str, dict[str, Any]],
     domain_age_cache: dict[str, int | None],
+    sender_authenticated: bool = False,
 ) -> dict[str, Any]:
     try:
         canonical, host, port, raw_host = canonicalize_url(url)
@@ -782,7 +814,14 @@ def analyze_single_url(
         reasons.append("Link host is an IP address")
 
     if host_base in SHORTENER_DOMAINS:
-        score += 25
+        # A shortener is weak evidence by itself -- newsletters use them constantly. What actually
+        # matters is where it RESOLVES, and the redirect chain below already analyses the final
+        # destination (domain age, threat intel, host shape), so a shortener hiding a malicious
+        # target is still caught on the destination's own merits. Weight it below the evidence
+        # floor for senders that authenticated, so an ordinary marketing link can no longer reach
+        # the auto-trash line on its own.
+        shortener_score = 15 if sender_authenticated else 25
+        score += shortener_score
         reasons.append(f"Shortened URL domain: {host_base}")
 
     if split.scheme != "https":
@@ -811,7 +850,17 @@ def analyze_single_url(
         score += 10
         reasons.append(f"High-risk top-level domain: .{tld}")
 
-    if sender_base and host_base and sender_base != host_base and host_base not in TRACKING_DOMAINS:
+    # A domain that cryptographically signed its own mail also chose its own mail vendor, so its
+    # links pointing at an ESP/CDN is expected, not impersonation. Without this, any authenticated
+    # newsletter that merely MENTIONS a brand name (crypto digests, marketing mail) collected +15
+    # on every link it contained.
+    if (
+        sender_base
+        and host_base
+        and sender_base != host_base
+        and host_base not in TRACKING_DOMAINS
+        and not sender_authenticated
+    ):
         sender_is_brand = any(sender_base.endswith(domain) for domain in LEGITIMATE_DOMAINS) or any(
             brand in sender_base for brand in BRAND_NAMES
         )
@@ -853,7 +902,12 @@ def analyze_single_url(
     # A link that redirects back to the sender's own domain (the standard shape of email
     # click-tracking) is a safety signal, not a risk signal -- only flag redirects that land
     # somewhere unrelated to both the link's own domain and the sender.
-    if final_base and final_base != host_base and final_base != sender_base:
+    if (
+        final_base
+        and final_base != host_base
+        and final_base != sender_base
+        and final_base not in COMMON_REDIRECT_DESTINATIONS
+    ):
         score += 10
         reasons.append(f"Redirects to different domain: {final_base}")
     if redirect_error:
@@ -913,6 +967,9 @@ def score_email(
     reasons: list[str] = []
     sender_domain = extract_domain(sender)
     content = f"{subject or ''} {snippet or ''} {full_text or ''}".lower()
+    # Resolved up front because link analysis needs it too -- see the mismatch rule in
+    # analyze_single_url(). How it is allowed to affect the score is decided at the end.
+    authenticated, auth_reason = sender_is_authenticated(auth_results, sender_domain)
 
     if is_suspicious_domain(sender_domain):
         technical_score += 30
@@ -952,6 +1009,7 @@ def score_email(
                 redirect_cache=redirect_cache,
                 intel_cache=intel_cache,
                 domain_age_cache=domain_age_cache,
+                sender_authenticated=authenticated,
             )
             link_findings.append(finding)
             if finding.get("risk_score", 0) >= 45:
@@ -985,7 +1043,6 @@ def score_email(
         # summaries from authenticated senders legitimately use every "urgent / account number /
         # penalty" phrase in the keyword lists. Drop the language score so routine mail stops
         # appearing in the report at all, rather than nagging as a permanent false positive.
-        authenticated, auth_reason = sender_is_authenticated(auth_results, sender_domain)
         if authenticated and content_score:
             reasons.append(f"{auth_reason}; language-only signals ignored")
             content_score = 0

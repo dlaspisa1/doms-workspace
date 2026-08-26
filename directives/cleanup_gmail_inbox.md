@@ -191,3 +191,30 @@ To run phishing/spam cleanup automatically every week with report email:
 - The Gmail *connector* (MCP) is read-only and cannot untrash. To restore messages, use local
   `token.json` (has `gmail.modify`) with `messages().modify()`:
   `removeLabelIds=["TRASH"], addLabelIds=["INBOX"]`. Other labels (UNREAD etc.) are preserved.
+- **2026-08-25 tightening (after 15 days live).** The job auto-trashed 5 legitimate messages over
+  that period. Re-running the scorer reproduced the report scores exactly, confirming the job --
+  not the user -- moved them. All five failed the same way: **ESP/tracking infrastructure was
+  being scored as attack evidence**, even for DMARC-authenticated senders. Four defects:
+  1. `extract_urls_from_html` scraped XML namespace URIs (`xmlns="http://www.w3.org/1999/xhtml"`)
+     out of raw markup and treated them as links, so every HTML newsletter appeared to link to an
+     unrelated non-HTTPS domain. Filtered via `NON_LINK_URI_HOSTS`.
+  2. Shorteners were double-counted: `analyze_single_url` scores them +25 explicitly AND
+     `is_suspicious_domain` returned True for them (+15). The shortener branch was removed from
+     `is_suspicious_domain`.
+  3. Redirecting to a mainstream site (twitter/facebook/instagram/outlook) is the normal shape of
+     a newsletter "follow us" button, not an attacker bounce. Skipped via
+     `COMMON_REDIRECT_DESTINATIONS`.
+  4. Sender/link domain mismatch fired for authenticated senders whenever the body merely
+     MENTIONED a brand name -- constant in crypto digests and marketing mail. A domain that signed
+     its own mail also chose its own ESP, so mismatch no longer applies to authenticated senders.
+  Additionally, a shortener is now weighted 15 (below the evidence floor) for authenticated
+  senders rather than 25. This is safe because the redirect chain resolves the shortener and the
+  FINAL destination is still scored on domain age and threat intel -- verified by a regression
+  case where bit.ly resolving to a 3-day-old domain still scores 100 and is still trashed.
+  Result: the five false positives now score 0-18 (all ignored), and a live 120-message inbox scan
+  went from 5 wrongful trashes to 0 trash / 1 flag.
+- **Regression suite lives at `execution/test_gmail_security_scoring.py`** -- run it
+  (`python3 execution/test_gmail_security_scoring.py`) after ANY scoring change. It pairs
+  legitimate-mail cases with adversarial phishing cases on purpose: a fix aimed at false positives
+  can silently disarm phishing detection while every legitimate case still passes.
+
