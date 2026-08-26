@@ -91,9 +91,25 @@ Full rationale in `directives/cleanup_gmail_inbox.md`. Summary of the invariants
    aligned `header.from`, or `dkim=pass` whose `header.i` aligns with the From: domain (compare
    registrable domains). Apply ONLY when technical evidence is already below the floor. A valid
    signature proves "this domain sent this", not "this domain is trustworthy".
+7. **Never score ESP/tracking infrastructure as attack evidence.** This caused a second round of
+   wrongful trashing (2026-08-25). Specifically: do not scrape XML namespace URIs out of raw HTML
+   and treat them as links; do not count a shortener twice; do not treat a redirect to a mainstream
+   site (twitter/facebook/instagram/outlook) as an attacker bounce; and do not apply sender/link
+   domain mismatch to authenticated senders, whose choice of mail vendor is their own. Weight
+   shorteners below the evidence floor for authenticated senders — the redirect chain resolves the
+   destination and scores it on domain age and threat intel, which is the real protection.
 
 **Never add a language/keyword signal to `technical_score`** — it silently re-enables keyword-only
 auto-trash.
+
+## Reference implementation and test suite
+
+Copy these rather than rebuilding from this description — they encode fixes that are not obvious:
+
+- `/Users/dominicklaspisa/Doms workspace/execution/modal_gmail_security_cleanup.py`
+- `/Users/dominicklaspisa/Doms workspace/execution/test_gmail_security_scoring.py`
+
+The test suite runs offline (caches are pre-seeded, no network) and must stay 12/12 green.
 
 ## Verification — required before declaring success
 
@@ -157,3 +173,9 @@ and shortener phishing to 40 — both under the trash line.
 - Verify claims about who moved a message from the report JSON (`dry_run`,
   `unique_messages_moved_to_trash`, and `source=high_risk`), not from the fact that a message is
   sitting in Trash. The user may have trashed it themselves.
+- 2026-08-25 tightening: fixed four defects that scored ESP/tracking infrastructure as attack
+  evidence (XML namespace URIs scraped as links, shortener double-counting, redirect-to-social
+  penalised, sender/link mismatch applied to authenticated senders). The five false positives went
+  from 70-85 to 0-18, and a live 120-message scan went from 5 wrongful trashes to 0 trash / 1 flag.
+  A permanent 12-case regression suite now guards both directions.
+
