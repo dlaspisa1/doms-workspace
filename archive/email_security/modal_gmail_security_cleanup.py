@@ -52,6 +52,35 @@ image = modal.Image.debian_slim(python_version="3.11").pip_install(
     "google-auth-httplib2",
 )
 
+# Persistent per-run state so reports are NOT cumulative: each run only scans inbox
+# messages it has never scored before and only lists spam it actually actioned this run.
+STATE_DICT_NAME = "gmail-cleanup-state"
+STATE_MAX_IDS = 20000  # keep the most recent N ids per set; older ones fall off
+
+
+def load_state() -> tuple[Any, set[str], set[str]]:
+    """Return (dict_handle, scanned_inbox_ids, actioned_ids). Never raises."""
+    try:
+        state = modal.Dict.from_name(STATE_DICT_NAME, create_if_missing=True)
+        scanned = set(state.get("scanned_inbox_ids", []) or [])
+        actioned = set(state.get("actioned_ids", []) or [])
+        return state, scanned, actioned
+    except Exception as error:
+        print(f"WARNING: could not load run state ({error}); treating every message as new")
+        return None, set(), set()
+
+
+def save_state(state, scanned_ids: list[str], actioned_ids: list[str], timestamp: str) -> None:
+    if state is None:
+        return
+    try:
+        state["scanned_inbox_ids"] = scanned_ids[-STATE_MAX_IDS:]
+        state["actioned_ids"] = actioned_ids[-STATE_MAX_IDS:]
+        state["last_run"] = timestamp
+    except Exception as error:
+        print(f"WARNING: could not save run state ({error})")
+
+
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.send",
@@ -1230,7 +1259,7 @@ def send_report_email(service, recipient: str, report: dict[str, Any]) -> str:
 
     moved_lines = []
     if moved_messages:
-        moved_lines.append("Moved/Selected messages (From | Subject):")
+        moved_lines.append("Messages actioned in THIS run (From | Subject):")
         for index, item in enumerate(moved_messages, start=1):
             source = item.get("source", "unknown")
             sender = normalize_whitespace(item.get("sender", "")) or "(unknown sender)"
@@ -1238,18 +1267,21 @@ def send_report_email(service, recipient: str, report: dict[str, Any]) -> str:
             msg_date = item.get("date", "")
             moved_lines.append(f"{index}. [{source}] {msg_date} | {sender} | {msg_subject}")
     else:
-        moved_lines.append("No messages were selected for trash action.")
+        moved_lines.append("No new messages were actioned in this run.")
 
     body = (
-        "Your Gmail security cleanup completed.\n\n"
+        "Your Gmail security cleanup completed.\n"
+        "All counts and the list below cover only this run (new messages since the last run).\n\n"
         f"Timestamp: {report['timestamp']}\n"
         f"Dry run: {report['dry_run']}\n"
-        f"Inbox scanned: {summary['inbox_scanned']}\n"
+        f"Inbox scanned (new this run): {summary['inbox_scanned']}\n"
+        f"Inbox skipped (scanned in a prior run): {summary.get('inbox_skipped_previously_scanned', 0)}\n"
         f"Suspicious detected: {summary['suspicious_detected']}\n"
         f"High-risk detected: {summary['high_risk_detected']}\n"
         f"Messages with URLs: {summary['messages_with_urls']}\n"
         f"Messages with high-risk links: {summary['messages_with_high_risk_links']}\n"
-        f"Spam detected: {summary['spam_detected']}\n"
+        f"Spam detected (new this run): {summary['spam_detected']}\n"
+        f"Spam skipped (actioned in a prior run): {summary.get('spam_skipped_previously_actioned', 0)}\n"
         f"Unique messages selected: {summary['unique_messages_selected']}\n"
         f"Moved to Trash: {summary['unique_messages_moved_to_trash']}\n\n"
         + "\n".join(moved_lines)
@@ -1314,7 +1346,15 @@ def run_cleanup(
     intel_cache: dict[str, dict[str, Any]] = {}
     domain_age_cache: dict[str, int | None] = {}
 
-    inbox_ids = list_message_ids(service, "in:inbox", max_inbox)
+    state, previously_scanned, previously_actioned = load_state()
+    if previously_scanned or previously_actioned:
+        print(f"Loaded state: {len(previously_scanned)} inbox ids already scanned, "
+              f"{len(previously_actioned)} ids already actioned")
+
+    all_inbox_ids = list_message_ids(service, "in:inbox", max_inbox)
+    inbox_ids = [message_id for message_id in all_inbox_ids if message_id not in previously_scanned]
+    inbox_skipped = len(all_inbox_ids) - len(inbox_ids)
+    print(f"Inbox: {len(all_inbox_ids)} listed, {len(inbox_ids)} new to scan, {inbox_skipped} already scanned")
     suspicious: list[dict[str, Any]] = []
     high_risk: list[dict[str, Any]] = []
     messages_with_urls = 0
@@ -1366,7 +1406,10 @@ def run_cleanup(
     high_risk.sort(key=lambda item: item.get("risk_score", 0), reverse=True)
 
     spam_query = f"in:spam older_than:{spam_older_than_days}d"
-    spam_ids = list_message_ids(service, spam_query, max_spam)
+    all_spam_ids = list_message_ids(service, spam_query, max_spam)
+    spam_ids = [message_id for message_id in all_spam_ids if message_id not in previously_actioned]
+    spam_skipped = len(all_spam_ids) - len(spam_ids)
+    print(f"Spam: {len(all_spam_ids)} listed, {len(spam_ids)} new, {spam_skipped} already actioned in a prior run")
     spam_messages: list[dict[str, Any]] = []
     for message_id in spam_ids:
         try:
@@ -1415,9 +1458,19 @@ def run_cleanup(
         for message_id in selected_ids
     ]
     moved = move_to_trash(service, selected_ids, dry_run=dry_run)
+    run_timestamp = datetime.now().isoformat()
+
+    if not dry_run:
+        # Record what this run saw/did so the next run only reports new items.
+        save_state(
+            state,
+            scanned_ids=[message_id for message_id in previously_scanned] + inbox_ids,
+            actioned_ids=[message_id for message_id in previously_actioned] + (selected_ids if moved else []),
+            timestamp=run_timestamp,
+        )
 
     report = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": run_timestamp,
         "dry_run": dry_run,
         "config": {
             "max_inbox": max_inbox,
@@ -1434,6 +1487,8 @@ def run_cleanup(
         },
         "summary": {
             "inbox_scanned": len(inbox_ids),
+            "inbox_skipped_previously_scanned": inbox_skipped,
+            "spam_skipped_previously_actioned": spam_skipped,
             "suspicious_detected": len([item for item in suspicious if item.get("risk_score", 0) >= 40]),
             "high_risk_detected": len([item for item in high_risk if item.get("risk_score", 0) >= high_risk_threshold]),
             "messages_with_urls": messages_with_urls,

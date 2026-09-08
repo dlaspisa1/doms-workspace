@@ -1,5 +1,7 @@
 # Gmail Inbox Cleanup
 
+> **RETIRED 2026-09-08.** The automated security cleanup (Modal app `gmail-security-cleanup`, profile `dlaspisa1`) was stopped at Dominick's request. Its code (`modal_gmail_security_cleanup.py`, `gmail_security_cleanup.py`, the scoring tests, and the deploy directive) now lives in `archive/email_security/`. Delete that folder after 2026-12-08 unless it has been turned back on (`tasks/todo.md`). Paths below that point at `execution/` are historical.
+
 ## Goal
 Automatically clean up Gmail inbox by intelligently categorizing emails into existing folders, archiving old messages (9+ months), and removing promotional content.
 
@@ -158,6 +160,25 @@ To run phishing/spam cleanup automatically every week with report email:
 6. **Undo**: Keep logs in `.tmp/` for reference; Gmail trash retention is 30 days
 7. **Errors**: Continue processing on individual message errors, log failures
 8. **Automation**: Cron requires `dry_run=False` to actually perform actions
+
+## Per-run state (reports are not cumulative)
+
+Added 2026-08-28 at the user's request: the daily report must only show what THAT run did.
+
+- `execution/modal_gmail_security_cleanup.py` keeps a Modal Dict named `gmail-cleanup-state`
+  (profile `dlaspisa1`) with `scanned_inbox_ids`, `actioned_ids`, and `last_run`.
+- Each run lists the inbox as before but only **scores ids it has never scored** — so
+  "Inbox scanned", "Messages with URLs", etc. count new mail only. Spam ids already actioned in
+  a prior run are skipped. The report shows the skipped counts on separate lines.
+- State is only saved on a **live** run (`dry_run=False`); dry runs never mutate it, so a dry
+  run is always safe to use for testing.
+- Each id set is capped at the most recent 20,000 entries.
+- If the Dict can't be loaded the run logs a WARNING and treats everything as new (old,
+  cumulative behaviour) rather than failing.
+- **To force a full rescan**: `modal dict delete gmail-cleanup-state` (or clear the keys) and
+  the next run scores the whole inbox again. Because the scorer also re-runs whenever a message
+  is new to the state, deleting the Dict is the way to re-validate a scoring change against the
+  live inbox (see the "Cleared to go live" note in `run_daily_cleanup`).
 
 ## Learnings
 - Always run with dry_run=true first to preview actions
