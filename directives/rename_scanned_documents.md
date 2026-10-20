@@ -94,6 +94,7 @@ python execution/rename_drive_files.py .tmp/rename_mapping.json --auto
 - **Rate limits**: Google Drive API has quota limits; script includes exponential backoff
 - **Anthropic API limits**: The analysis script saves after each file to handle interruptions
 - **Authentication**: Token expires → re-authenticate via OAuth flow
+- **Gmail `invalid_grant` in `send_email`**: Google revoked the Gmail refresh token (typically a password change or a third-party-access review; the Drive token survives because only Gmail-scoped tokens are revoked). Filing has already finished when the email step fails, so only the report is lost. Fix: `python3 execution/mint_gmail_send_token.py` → sign in as dlaspisa1@gmail.com → it overwrites the Modal `gmail-token` secret directly (no redeploy, no local copy). Verify with `modal.Function.from_name('doc-rename-automation', 'test_email').remote()`. Keep the failure fatal — the Modal failure alert is the only signal that reports have stopped. (Seen 2026-10-19/20.)
 - **File access**: Some files may be locked or have permission issues → skip and log
 - **Large files**: Files >10MB may take longer to download/analyze
 
@@ -132,6 +133,6 @@ modal run execution/modal_doc_rename.py
 **Required secrets:**
 - `gdrive-token` - Google Drive auth (token_drive.json)
 - `gemini-key` - Gemini API key (requires billing enabled on Google Cloud project)
-- `gmail-token` - Gmail auth for email reports (token.json)
+- `gmail-token` - Gmail auth for email reports (`gmail.send` scope only, since 2026-10-20; mint with `execution/mint_gmail_send_token.py`)
 
 **Key learning:** Gemini API requires billing enabled on the Google Cloud project, even for free tier usage. Without billing, quota is set to 0.
