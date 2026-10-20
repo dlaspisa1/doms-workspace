@@ -49,3 +49,9 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# Personal data imports/exports and browser backups — never commit (repo is PUBLIC)
+/RE Activity Log*.csv
+rep-pwa/backups/
+rep-pwa/scripts/import_logs*.json
+rep-pwa/scripts/import_stats.txt
