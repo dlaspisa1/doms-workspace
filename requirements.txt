@@ -10,6 +10,6 @@ intuit-oauth>=1.2.6
 # Core dependencies
 python-dotenv==1.0.0
 
-# Bitcoin dashboard snapshot (execution/bitcoin_snapshot.py)
+# Data scripts (pandas: chart/Excel scripts; pytrends: bitcoin_snapshot.py)
 pandas
 pytrends

@@ -26,7 +26,7 @@ Output (default .tmp/bitcoin_snapshot.json):
   reddit       r/Bitcoin hot posts with a keyword mood
   wallet       top 100 addresses (Blockchair)
   trends       Google Trends weekly search interest for "bitcoin" (12 months)
-  institution  reference estimates of institutional holdings (mid-2025)
+  institution  reference estimates of institutional holdings (each with an as_of date)
   halving      reference table of past and next halvings
   s2f_ref      reference stock-to-flow values at each halving
 
@@ -212,7 +212,7 @@ BEARISH_WORDS = {"bear", "bearish", "dump", "crash", "sell", "short", "down", "d
 INSTITUTIONS = [
     {"entity": "BlackRock (IBIT ETF)", "type": "ETF", "btc": 550_000, "notes": "Largest Bitcoin ETF by AUM"},
     {"entity": "Grayscale (GBTC)", "type": "ETF/Trust", "btc": 220_000, "notes": "Original institutional product"},
-    {"entity": "Strategy (MicroStrategy)", "type": "Corp Treasury", "btc": 226_000, "notes": "Largest corporate holder"},
+    {"entity": "Strategy (MicroStrategy)", "type": "Corp Treasury", "btc": 848_517, "notes": "Largest corporate holder (Form 8-K)", "as_of": "Oct 25, 2026"},
     {"entity": "Fidelity (FBTC)", "type": "ETF", "btc": 175_000, "notes": "Second largest spot ETF"},
     {"entity": "US Government", "type": "Sovereign", "btc": 200_000, "notes": "Seized assets (DOJ/Treasury)"},
     {"entity": "Ark Invest (ARKB)", "type": "ETF", "btc": 50_000, "notes": "Cathie Wood's Bitcoin ETF"},
@@ -487,9 +487,9 @@ def collect_reference(s):
 
 
 def collect_institutions(s):
-    s.source("holdings", "ok", "Fixed estimates from public filings and reports through mid-2025, not live")
+    s.source("holdings", "ok", "Fixed estimates from public filings, each dated in its as_of; not live")
     for e in INSTITUTIONS:
-        s.add("institution", **e, as_of="mid-2025")
+        s.add("institution", **{"as_of": "mid-2025", **e})
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
