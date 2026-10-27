@@ -98,13 +98,15 @@ The system supports event-driven execution via Modal webhooks. Each webhook maps
 
 ## Agents
 
+Shared spawn, model, and session rules are in `~/.claude/CLAUDE.md`. This file adds Doms-workspace context, agents, and gates.
+
 Three real subagents live in `.claude/agents/`, spawnable by name via the Agent tool:
 
 | Agent | Domain |
 |-------|--------|
 | **cfo** | Personal QuickBooks (reconciliation, year-end close) + bitcoin dashboard |
 | **csp** | Code review for `execution/` scripts, the Modal webhook system, `rep-pwa/` |
-| **auditor** | Post-task quality review, logs to `tasks/lessons.md` |
+| **auditor** | Review higher-risk changes before execution/commit; draft lessons only for non-obvious findings |
 
 Routing config: `agents/registry.json`. Full rules: `directives/governance.md` (CLAUDE.md wins on any conflict).
 
@@ -116,4 +118,4 @@ You sit between human intent (directives) and deterministic execution (Python sc
 
 Be pragmatic. Be reliable. Self-anneal.
 
-Also, use Opus-4.5 for everything while building. It came out a few days ago and is an order of magnitude better than Sonnet and other models. If you can't find it, look it up first.
+

@@ -1,46 +1,113 @@
 {
   "version": "1.0",
   "description": "Agent routing configuration for Dom's personal workspace. Personas are wired as real Claude Code subagents in .claude/agents/ — this file is the machine-readable source for gates and routing.",
-  "updated": "2026-08-19",
-
+  "updated": "2026-09-16",
   "agents": {
     "cfo": {
       "name": "Chief Financial Officer",
-      "domains": ["finance", "quickbooks", "bitcoin"],
-      "keywords": ["QBO", "QuickBooks", "reconcile", "bank", "transaction", "bitcoin", "btc", "wallet", "dashboard", "year-end", "close"],
+      "domains": [
+        "finance",
+        "quickbooks",
+        "bitcoin"
+      ],
+      "keywords": [
+        "QBO",
+        "QuickBooks",
+        "reconcile",
+        "bank",
+        "transaction",
+        "bitcoin",
+        "btc",
+        "wallet",
+        "dashboard",
+        "year-end",
+        "close"
+      ],
       "directives": [
         "quickbooks_operations.md",
         "qbo_year_end_close.md",
         "bitcoin_dashboard.md"
-      ]
+      ],
+      "model": "opus",
+      "effort": "high",
+      "maxTurns": 20,
+      "delegation_scope": "Substantive specialist judgment, existing required domain review, or explicit request; not routine execution, reports or keyword matches alone."
     },
     "csp": {
       "name": "Chief Software Programmer",
-      "domains": ["code", "scripts", "automation", "webhooks", "rep-pwa"],
-      "keywords": ["script", "code", "bug", "error", "api", "automate", "python", "fix", "debug", "test", "oauth", "webhook", "modal", "rep-pwa"],
-      "directives": []
+      "domains": [
+        "code",
+        "scripts",
+        "automation",
+        "webhooks",
+        "rep-pwa"
+      ],
+      "keywords": [
+        "script",
+        "code",
+        "bug",
+        "error",
+        "api",
+        "automate",
+        "python",
+        "fix",
+        "debug",
+        "test",
+        "oauth",
+        "webhook",
+        "modal",
+        "rep-pwa"
+      ],
+      "directives": [],
+      "model": "opus",
+      "effort": "high",
+      "maxTurns": 20,
+      "invoke_when": [
+        "Before architectural changes, an existing compliance gate assigning review to csp, or an explicit request; not routine debugging or multi-file edits alone."
+      ]
     },
     "auditor": {
       "name": "Chief Audit Officer",
-      "domains": ["audit", "review", "quality", "learnings"],
-      "keywords": ["audit", "review", "improve", "check", "verify", "quality", "lessons", "learnings"],
-      "special": "Can run in parallel with any agent"
+      "domains": [
+        "audit",
+        "review",
+        "quality",
+        "learnings"
+      ],
+      "keywords": [
+        "audit",
+        "review",
+        "improve",
+        "check",
+        "verify",
+        "quality",
+        "lessons",
+        "learnings"
+      ],
+      "special": "One bounded risk review; parallel only with an independent required review.",
+      "model": "sonnet",
+      "effort": "medium",
+      "maxTurns": 12,
+      "invoke_when": [
+        "Before direct stored-data writes (backfills, migrations, repairs or column writes), changes to financial/accounting calculations, security/authentication/tenant boundaries, or year-end close; also when explicitly requested. File count alone is not a trigger."
+      ]
     }
   },
-
   "routing": {
-    "priority": ["cfo", "csp", "auditor"],
-    "default": "csp",
-    "method": "highest_keyword_match"
+    "priority": [
+      "cfo",
+      "csp",
+      "auditor"
+    ],
+    "default": "main_session",
+    "method": "explicit_trigger_then_domain_match"
   },
-
   "fast_path": {
-    "description": "Skip routing overhead for simple operations",
+    "description": "Main-session execution for routine fixes, documentation/config edits, lookups, reports and tests; file count alone does not require delegation. Required risk reviews and approval gates always take precedence.",
     "criteria": [
-      "Single read-only action",
-      "No payment/transfer involved",
-      "No external system write",
-      "No compliance gate trigger"
+      "No required specialist/risk review",
+      "No unresolved compliance gate",
+      "Routine execution, lookup, report, fix or test"
     ],
     "examples": [
       "Show QBO balance",
@@ -48,9 +115,16 @@
       "Check script status",
       "Check bitcoin price/holdings (read-only)"
     ],
-    "skip": ["routing_ceremony", "learnings_check", "audit_logging"]
+    "skip": [
+      "routing_ceremony",
+      "learnings_check"
+    ],
+    "preserve": [
+      "Required compliance and exception logging",
+      "Required risk reviews",
+      "All approval gates"
+    ]
   },
-
   "lazy_learnings": {
     "description": "Check learnings file only when needed",
     "check_when": [
@@ -65,7 +139,6 @@
     ],
     "source": "tasks/lessons.md (grep by integration/error keyword)"
   },
-
   "compliance_gates": {
     "large_transaction": {
       "trigger": "Payment, transfer, or transaction amount exceeds threshold",
@@ -84,9 +157,8 @@
       "agent": "any"
     }
   },
-
   "audit_policy": {
-    "description": "Exception-based logging - don't log routine success",
+    "description": "Risk-triggered review before execution/commit; exception-based logging, never routine success.",
     "log_when": [
       "Error or failure occurs",
       "User corrects an action",
@@ -98,18 +170,38 @@
       "Read-only queries",
       "Standard reports"
     ],
-    "destination": "tasks/lessons.md"
+    "destination": "tasks/lessons.md",
+    "trigger": "Before direct stored-data writes (backfills, migrations, repairs or column writes), changes to financial/accounting calculations, security/authentication/tenant boundaries, or year-end close; also when explicitly requested. File count alone is not a trigger.",
+    "spawn": "auditor"
   },
-
   "parallel_execution": {
     "safe_combinations": [
-      ["cfo", "csp"],
-      ["auditor", "*"]
+      [
+        "cfo",
+        "csp"
+      ],
+      [
+        "auditor",
+        "*"
+      ]
     ],
     "never_parallel": [
       "Two writes to same system",
       "Dependent operations",
       "Multiple payment/transfer operations"
-    ]
+    ],
+    "condition": "Only after each agent meets its explicit trigger and the assignments are independent; safe combinations do not authorize spawning."
+  },
+  "delegation_policy": {
+    "default": "main_session",
+    "source": "~/.claude/CLAUDE.md (shared usage); workspace CLAUDE.md (local triggers)",
+    "keywords_are_triggers": false,
+    "normal_reviewer_count": 1,
+    "additional_reviewers": "Only for a distinct required review; no duplicate review of the same question.",
+    "nested_agents": false,
+    "automatic_resume": false,
+    "incomplete_verdict": "NOT VERIFIED",
+    "approval_gates_unchanged": true,
+    "gate_assigned_reviews": "A named gate agent retains its required review; csp includes gate-assigned credential/deployment review. The any designation does not itself require an extra agent."
   }
 }

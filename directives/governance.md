@@ -12,7 +12,7 @@ This is a personal automation hub, not a business entity — no legal/marketing/
 | **csp** | Chief Software Programmer | `execution/` scripts, Modal webhook system, `rep-pwa/` | Credential/API-key/OAuth changes require explicit approval before applying |
 | **auditor** | Chief Audit Officer | Post-task quality review, `tasks/lessons.md` | Read-only reviewer; flags compliance gates it finds skipped |
 
-Spawn any of these by name via the Agent tool. `auditor` can run in parallel with either of the other two.
+Spawn only for the global usage-rule triggers, plus any extra triggers in this workspace's `CLAUDE.md`. Routine execution stays in the main session; concurrent reviewers must have distinct required, independent assignments.
 
 ## Compliance Gates (require explicit user approval)
 
@@ -25,3 +25,7 @@ Full machine-readable gate definitions: `agents/registry.json`.
 ## Lessons
 
 `tasks/lessons.md` is the single institutional-memory file — non-obvious root causes, corrections, and API quirks. Grep it at the start of a task per CLAUDE.md.
+
+## Usage policy
+
+Shared usage, model, review-limit, context-handoff and waiting rules live in `~/.claude/CLAUDE.md`. This workspace's `CLAUDE.md` adds local agents, extra triggers and gates only. Agent definitions and `agents/registry.json` mirror that split. Domain responsibilities describe expertise, not automatic spawning. Existing compliance gates remain unchanged.

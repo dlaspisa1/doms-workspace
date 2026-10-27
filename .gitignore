@@ -55,3 +55,8 @@ Thumbs.db
 rep-pwa/backups/
 rep-pwa/scripts/import_logs*.json
 rep-pwa/scripts/import_stats.txt
+rep-pwa/scripts/import_paste*.js
+rep-pwa/scripts/import_cloud_delta.js
+# Hardcode personal identifiers; local only
+rep-pwa/scripts/post_rep_logs.py
+execution/archive_cleanup.py

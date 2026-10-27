@@ -20,6 +20,8 @@ const CATEGORIES = [
     activities:["Attorney communication","Contract drafting / review","Landlord-tenant law research","Entity / LLC administration","FIRPTA / tax compliance","Dispute resolution"] },
   { id:"education", label:"Education & Professional Development", icon:"📚", color:"#7EC8B4",
     activities:["Real estate market research","Industry courses / webinars","Networking with professionals","Reading trade publications"] },
+  { id:"software", label:"Software & Systems", icon:"💻", color:"#8AC8C0",
+    activities:["App / tool development","Automation & workflows","Property-management systems","Data / reporting tooling","Testing & maintenance"] },
 ];
 
 const DEFAULT_PROPERTIES = [
