@@ -28,7 +28,7 @@
         "qbo_year_end_close.md",
         "bitcoin_dashboard.md"
       ],
-      "model": "opus",
+      "model": "sonnet",
       "effort": "high",
       "maxTurns": 20,
       "delegation_scope": "Substantive specialist judgment, existing required domain review, or explicit request; not routine execution, reports or keyword matches alone."
@@ -59,7 +59,7 @@
         "rep-pwa"
       ],
       "directives": [],
-      "model": "opus",
+      "model": "sonnet",
       "effort": "high",
       "maxTurns": 20,
       "invoke_when": [
