@@ -439,6 +439,44 @@ def send_email(subject, body):
     print(f"Email sent: {subject}")
 
 
+def save_report_to_drive(subject, body):
+    """Fallback when the report email fails: drop the report into Raven Scans as a .txt.
+
+    Never raises; returns where the report went (or why it couldn't be saved).
+    Text files are ignored by the PDF scan, so the report is never re-processed.
+    """
+    try:
+        from googleapiclient.http import MediaIoBaseUpload
+        svc = get_drive_service()
+        raven_id = find_folder_by_name(svc, RAVEN_SCANS_NAME)
+        name = f"_DocAutomation_Report_{datetime.now().strftime('%Y-%m-%d_%H%M')}.txt"
+        media = MediaIoBaseUpload(io.BytesIO(f"{subject}\n\n{body}".encode()), mimetype="text/plain")
+        meta = {"name": name, "parents": [raven_id]} if raven_id else {"name": name}
+        svc.files().create(body=meta, media_body=media, fields="id").execute()
+        return f"{RAVEN_SCANS_NAME}/{name}" if raven_id else f"My Drive/{name}"
+    except Exception as e:
+        return f"not saved ({e})"
+
+
+def deliver_report(subject, body):
+    """Email the report. If the email fails, save the report to Drive, then fail loudly.
+
+    The failure stays fatal on purpose: the Modal failure alert is the only signal that
+    report emails have stopped (see directives/rename_scanned_documents.md).
+    """
+    try:
+        send_email(subject, body)
+    except Exception as e:
+        saved = save_report_to_drive(subject, body)
+        hint = ""
+        if "invalid_grant" in str(e):
+            hint = (" Gmail token is expired or revoked: run "
+                    "`python3 execution/mint_gmail_send_token.py` and sign in as dlaspisa1@gmail.com.")
+        raise RuntimeError(
+            f"Report email failed after files were processed. Report saved to Drive: {saved}.{hint}"
+        ) from e
+
+
 # ── Main function ─────────────────────────────────────────────────────────────
 
 @app.function(
@@ -471,7 +509,7 @@ def process_scanned_documents():
         report.append(f"\nFound {len(files)} PDFs in Raven Scans")
 
         if not files:
-            send_email("Doc Automation: nothing to process", "\n".join(report))
+            deliver_report("Doc Automation: nothing to process", "\n".join(report))
             return
 
         claude = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
@@ -585,7 +623,7 @@ def process_scanned_documents():
 
     body = "\n".join(report)
     print(f"\n{body}")
-    send_email(subject, body)
+    deliver_report(subject, body)
 
     return {"renamed": len(renamed), "filed": total, "stayed": len(stayed), "errors": len(errors)}
 
